@@ -1,0 +1,11 @@
+*.bam
+*.bw
+*.sam
+*results/*
+*.sbatch
+*.bai
+*.fq.gz
+*.fastq.gz
+*.fastq
+*.fq
+*.fasta
