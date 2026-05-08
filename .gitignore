@@ -10,7 +10,7 @@
 *.fq
 *.fasta
 *.img
-*.nextflow.log
+*.nextflow.log*
 index/
 null/
 results/
