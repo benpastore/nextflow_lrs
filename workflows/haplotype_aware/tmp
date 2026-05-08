@@ -1,0 +1,327 @@
+nextflow.enable.dsl=2
+
+params.reads        = null
+params.reference    = null
+params.genome_size  = null
+params.sample_id    = "sample"
+params.outdir       = "results"
+params.threads      = 16
+params.flye_model   = "nano-hq"   // use "nano-raw" for older/noisier ONT
+params.clair3_model = "r1041_e82_400bps_sup_v500"
+params.publish_mode = "copy"
+
+
+
+if (!params.reads || !params.reference || !params.genome_size) {
+    error """
+    Required parameters:
+      --reads        path to ONT FASTQ/FASTQ.GZ
+      --reference    reference FASTA
+      --genome_size  e.g. 3.1g, 120m, 5m
+    Optional:
+      --sample_id
+      --threads
+      --flye_model
+      --clair3_model
+      --outdir
+    """
+}
+
+workflow {
+
+    reads_ch = Channel.fromPath(params.reads, checkIfExists: true)
+    ref_ch   = Channel.fromPath(params.reference, checkIfExists: true)
+
+    ref_idx_ch = INDEX_REFERENCE(ref_ch)
+    asm_ch     = FLYE_ASSEMBLE(reads_ch)
+    asm_idx_ch = INDEX_ASSEMBLY(asm_ch)
+
+    asm_bam_ch = MAP_READS_TO_ASSEMBLY(reads_ch, asm_ch)
+    hapdup_ch  = HAPDUP_PHASE(asm_ch, asm_bam_ch)
+
+    ref_bam_ch   = MAP_READS_TO_REFERENCE(reads_ch, ref_ch)
+    clair3_ch    = CLAIR3_CALL(reads_ch, ref_ch, ref_bam_ch)
+    phase_ch     = WHATSHAP_PHASE(ref_ch, clair3_ch, ref_bam_ch)
+    haplotag_ch  = WHATSHAP_HAPLOTAG(ref_ch, phase_ch, ref_bam_ch)
+    sniffles_ch  = SNIFFLES_SV(haplotag_ch)
+
+    hap_align_ch = ALIGN_HAPLOTYPES_TO_REFERENCE(hapdup_ch, ref_ch)
+}
+
+process INDEX_REFERENCE {
+    tag "index_reference"
+    cpus 2
+
+    publishDir "${params.outdir}/reference", mode: params.publish_mode
+
+    input:
+    path ref
+
+    output:
+    tuple path(ref), path("${ref}.fai")
+
+    script:
+    """
+    samtools faidx ${ref}
+    """
+}
+
+process FLYE_ASSEMBLE {
+    tag "${params.sample_id}"
+    cpus params.threads
+    memory '64 GB'
+    publishDir "${params.outdir}/assembly/flye", mode: params.publish_mode
+
+    input:
+    path reads
+
+    output:
+    path "assembly.fasta"
+
+    script:
+    """
+    flye \
+      --${params.flye_model} ${reads} \
+      --genome-size ${params.genome_size} \
+      --threads ${task.cpus} \
+      --out-dir flye_out
+
+    cp flye_out/assembly.fasta assembly.fasta
+    """
+}
+
+process INDEX_ASSEMBLY {
+    tag "index_assembly"
+    cpus 2
+    publishDir "${params.outdir}/assembly/flye", mode: params.publish_mode
+
+    input:
+    path assembly
+
+    output:
+    tuple path(assembly), path("${assembly}.fai")
+
+    script:
+    """
+    samtools faidx ${assembly}
+    """
+}
+
+process MAP_READS_TO_ASSEMBLY {
+    tag "${params.sample_id}"
+    cpus params.threads
+    memory '64 GB'
+    publishDir "${params.outdir}/assembly/read_to_assembly", mode: params.publish_mode
+
+    input:
+    path reads
+    path assembly
+
+    output:
+    path "reads_to_assembly.sorted.bam"
+    path "reads_to_assembly.sorted.bam.bai"
+
+    script:
+    """
+    minimap2 -t ${task.cpus} -ax map-ont ${assembly} ${reads} \
+      | samtools sort -@ ${task.cpus} -o reads_to_assembly.sorted.bam
+
+    samtools index reads_to_assembly.sorted.bam
+    """
+}
+
+process HAPDUP_PHASE {
+    tag "${params.sample_id}"
+    cpus params.threads
+    memory '64 GB'
+    publishDir "${params.outdir}/assembly/hapdup", mode: params.publish_mode
+
+    input:
+    path assembly
+    path asm_bam
+    path asm_bai
+
+    output:
+    path "hapdup/hap1.fa"
+    path "hapdup/hap2.fa"
+
+    script:
+    """
+    mkdir -p hapdup
+
+    hapdup \
+      --assembly ${assembly} \
+      --bam ${asm_bam} \
+      --out-dir hapdup \
+      --threads ${task.cpus}
+
+    test -s hapdup/hap1.fa
+    test -s hapdup/hap2.fa
+    """
+}
+
+process MAP_READS_TO_REFERENCE {
+    tag "${params.sample_id}"
+    cpus params.threads
+    memory '64 GB'
+    publishDir "${params.outdir}/alignment/reference", mode: params.publish_mode
+
+    input:
+    path reads
+    path ref
+
+    output:
+    path "reads_to_ref.sorted.bam"
+    path "reads_to_ref.sorted.bam.bai"
+
+    script:
+    """
+    minimap2 -t ${task.cpus} -ax map-ont ${ref} ${reads} \
+      | samtools sort -@ ${task.cpus} -o reads_to_ref.sorted.bam
+
+    samtools index reads_to_ref.sorted.bam
+    """
+}
+
+process CLAIR3_CALL {
+    tag "${params.sample_id}"
+    cpus params.threads
+    memory '64 GB'
+    publishDir "${params.outdir}/variants/clair3", mode: params.publish_mode
+
+    input:
+    path reads
+    path ref
+    path bam
+    path bai
+
+    output:
+    path "clair3/merge_output.vcf.gz"
+    path "clair3/merge_output.vcf.gz.tbi"
+
+    script:
+    """
+    mkdir -p clair3
+
+    run_clair3.sh \
+      --bam_fn=${bam} \
+      --ref_fn=${ref} \
+      --threads=${task.cpus} \
+      --platform=ont \
+      --model_path=/opt/models/${params.clair3_model} \
+      --output=clair3
+
+    test -s clair3/merge_output.vcf.gz
+    test -s clair3/merge_output.vcf.gz.tbi
+    """
+}
+
+process WHATSHAP_PHASE {
+    tag "${params.sample_id}"
+    cpus 8
+    memory '32 GB'
+    publishDir "${params.outdir}/variants/phased", mode: params.publish_mode
+
+    input:
+    path ref
+    path vcf
+    path tbi
+    path bam
+    path bai
+
+    output:
+    path "phased.vcf.gz"
+    path "phased.vcf.gz.tbi"
+
+    script:
+    """
+    whatshap phase \
+      --reference ${ref} \
+      --output phased.vcf.gz \
+      ${vcf} \
+      ${bam}
+
+    tabix -p vcf phased.vcf.gz
+    """
+}
+
+process WHATSHAP_HAPLOTAG {
+    tag "${params.sample_id}"
+    cpus 8
+    memory '32 GB'
+    publishDir "${params.outdir}/alignment/haplotagged", mode: params.publish_mode
+
+    input:
+    path ref
+    path phased_vcf
+    path phased_tbi
+    path bam
+    path bai
+
+    output:
+    path "haplotagged.bam"
+    path "haplotagged.bam.bai"
+
+    script:
+    """
+    whatshap haplotag \
+      --reference ${ref} \
+      --output haplotagged.bam \
+      --output-haplotag-list haplotags.tsv \
+      ${phased_vcf} \
+      ${bam}
+
+    samtools index haplotagged.bam
+    """
+}
+
+process SNIFFLES_SV {
+    tag "${params.sample_id}"
+    cpus 8
+    memory '32 GB'
+    publishDir "${params.outdir}/variants/sniffles2", mode: params.publish_mode
+
+    input:
+    path bam
+    path bai
+
+    output:
+    path "sniffles2.vcf.gz"
+    path "sniffles2.vcf.gz.tbi"
+
+    script:
+    """
+    sniffles \
+      --input ${bam} \
+      --vcf sniffles2.vcf \
+      --threads ${task.cpus} \
+      --allow-overwrite
+
+    bgzip -f sniffles2.vcf
+    tabix -p vcf sniffles2.vcf.gz
+    mv sniffles2.vcf.gz sniffles2.vcf.gz
+    mv sniffles2.vcf.gz.tbi sniffles2.vcf.gz.tbi
+    """
+}
+
+process ALIGN_HAPLOTYPES_TO_REFERENCE {
+    tag "${params.sample_id}"
+    cpus params.threads
+    memory '64 GB'
+    publishDir "${params.outdir}/assembly/haplotype_alignments", mode: params.publish_mode
+
+    input:
+    path hap1
+    path hap2
+    path ref
+
+    output:
+    path "hap1_to_ref.paf"
+    path "hap2_to_ref.paf"
+
+    script:
+    """
+    minimap2 -t ${task.cpus} -x asm5 ${ref} ${hap1} > hap1_to_ref.paf
+    minimap2 -t ${task.cpus} -x asm5 ${ref} ${hap2} > hap2_to_ref.paf
+    """
+}

@@ -9,17 +9,17 @@ def process_design(file) :
     df = pd.read_csv(file, sep = "\t")
 
     # make csv for fastq channel
-    df['simple_name'] = df.apply(lambda row: os.path.basename(row['Reads']).split(".")[0], axis = 1)
-    df['condition'] = df.apply(lambda row: f"{row['Condition']}", axis = 1)
+    #df['simple_name'] = df.apply(lambda row: os.path.basename(row['ONT']).split(".")[0], axis = 1)
+    #df['condition'] = df.apply(lambda row: f"{row['Condition']}", axis = 1)
 
-    fastq = df[['simple_name', 'Reads']]
+    fastq = df[['SAMPLE', 'ONT', 'R1_ILLUMINA', 'R2_ILLUMINA']]
 
     # to join replicates
-    replicates = df[['simple_name', 'condition']]
+    #replicates = df[['simple_name', 'condition']]
 
     # control_association
     fastq.to_csv("fastq.csv", sep = ',', header = True, index = False)
-    replicates.to_csv("replicates.csv", sep = ',', header = True, index = False)
+    #replicates.to_csv("replicates.csv", sep = ',', header = True, index = False)
 
 def get_args() : 
 

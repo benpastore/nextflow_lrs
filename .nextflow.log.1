@@ -1,0 +1,191 @@
+Feb-13 15:14:58.122 [main] DEBUG nextflow.cli.Launcher - $> nextflow /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/workflows/nanopore/main.nf --design /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/family_14.txt --results /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/results_family_14 -resume
+Feb-13 15:14:58.266 [main] DEBUG nextflow.cli.CmdRun - N E X T F L O W  ~  version 25.10.3
+Feb-13 15:14:58.298 [main] DEBUG nextflow.plugin.PluginsFacade - Setting up plugin manager > mode=prod; embedded=false; plugins-dir=/users/PAS0631/osu6602/.nextflow/plugins; core-plugins: nf-amazon@3.4.3,nf-azure@1.20.2,nf-cloudcache@0.5.0,nf-codecommit@0.5.0,nf-console@1.3.0,nf-google@1.23.4,nf-k8s@1.2.2,nf-tower@1.17.4,nf-wave@1.16.1
+Feb-13 15:14:58.333 [main] INFO  o.pf4j.DefaultPluginStatusProvider - Enabled plugins: []
+Feb-13 15:14:58.334 [main] INFO  o.pf4j.DefaultPluginStatusProvider - Disabled plugins: []
+Feb-13 15:14:58.336 [main] INFO  org.pf4j.DefaultPluginManager - PF4J version 3.12.0 in 'deployment' mode
+Feb-13 15:14:58.347 [main] DEBUG nextflow.util.RetryConfig - Missing nextflow session - using default retry config
+Feb-13 15:14:58.467 [main] INFO  org.pf4j.AbstractPluginManager - No plugins
+Feb-13 15:14:58.494 [main] DEBUG nextflow.config.ConfigBuilder - Found config base: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/workflows/nanopore/nextflow.config
+Feb-13 15:14:58.497 [main] DEBUG nextflow.config.ConfigBuilder - Parsing config file: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/workflows/nanopore/nextflow.config
+Feb-13 15:14:58.520 [main] DEBUG nextflow.config.ConfigBuilder - Applying config profile: `standard`
+Feb-13 15:14:58.960 [main] DEBUG nextflow.plugin.PluginsFacade - Plugins default=[]
+Feb-13 15:14:58.961 [main] DEBUG nextflow.plugin.PluginsFacade - Plugins resolved requirement=[]
+Feb-13 15:14:58.973 [main] DEBUG n.secret.LocalSecretsProvider - Secrets store: /users/PAS0631/osu6602/.nextflow/secrets/store.json
+Feb-13 15:14:58.976 [main] DEBUG nextflow.secret.SecretsLoader - Discovered secrets providers: [nextflow.secret.LocalSecretsProvider@6056232d] - activable => nextflow.secret.LocalSecretsProvider@6056232d
+Feb-13 15:14:59.002 [main] DEBUG nextflow.cli.CmdRun - Applied DSL=2 from script declaration
+Feb-13 15:14:59.015 [main] DEBUG nextflow.cli.CmdRun - Launching `/fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/workflows/nanopore/main.nf` [fabulous_hamilton] DSL2 - revision: 77b257cce6
+Feb-13 15:14:59.058 [main] DEBUG nextflow.Session - Session UUID: 0ce1c68a-a4e9-46c7-9b0d-86778d2cbb88
+Feb-13 15:14:59.058 [main] DEBUG nextflow.Session - Run name: fabulous_hamilton
+Feb-13 15:14:59.059 [main] DEBUG nextflow.Session - Executor pool size: 5
+Feb-13 15:14:59.067 [main] DEBUG nextflow.file.FilePorter - File porter settings maxRetries=3; maxTransfers=50; pollTimeout=null
+Feb-13 15:14:59.071 [main] DEBUG nextflow.util.ThreadPoolBuilder - Creating thread pool 'FileTransfer' minSize=10; maxSize=15; workQueue=LinkedBlockingQueue[-1]; allowCoreThreadTimeout=false
+Feb-13 15:14:59.091 [main] DEBUG nextflow.cli.CmdRun - 
+  Version: 25.10.3 build 10983
+  Created: 22-01-2026 15:34 UTC (10:34 EDT)
+  System: Linux 5.14.0-427.102.1.el9_4.x86_64
+  Runtime: Groovy 4.0.28 on OpenJDK 64-Bit Server VM 17.0.17+10-LTS
+  Encoding: UTF-8 (UTF-8)
+  Process: 1395018@a0109.ten.osc.edu [10.6.5.9]
+  CPUs: 5 - Mem: 503.5 GB (408.1 GB) - Swap: 48 GB (47.3 GB)
+Feb-13 15:14:59.122 [main] DEBUG nextflow.Session - Work-dir: /fs/scratch/PAS0631/nanopore_tmp_vicki [gpfs]
+Feb-13 15:14:59.123 [main] DEBUG nextflow.Session - Script base path does not exist or is not a directory: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/workflows/nanopore/bin
+Feb-13 15:14:59.130 [main] DEBUG nextflow.executor.ExecutorFactory - Extension executors providers=[]
+Feb-13 15:14:59.138 [main] DEBUG nextflow.Session - Observer factory (v2): LinObserverFactory
+Feb-13 15:14:59.140 [main] DEBUG nextflow.Session - Observer factory (v2): DefaultObserverFactory
+Feb-13 15:14:59.178 [main] DEBUG nextflow.cache.CacheFactory - Using Nextflow cache factory: nextflow.cache.DefaultCacheFactory
+Feb-13 15:14:59.186 [main] DEBUG nextflow.util.CustomThreadPool - Creating default thread pool > poolSize: 6; maxThreads: 1000
+Feb-13 15:14:59.352 [main] DEBUG nextflow.Session - Session start
+Feb-13 15:14:59.640 [main] DEBUG nextflow.script.ScriptRunner - > Launching execution
+Feb-13 15:15:00.069 [main] WARN  nextflow.script.ScriptBinding - Access to undefined parameter `outprefix` -- Initialise it to a default value eg. `params.outprefix = some_value`
+Feb-13 15:15:00.093 [main] DEBUG n.script.dsl.ProcessConfigBuilder - Config settings `withLabel:low` matches labels `low` for process with name parse_design:DESIGN_INPUT
+Feb-13 15:15:00.096 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: slurm
+Feb-13 15:15:00.097 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'slurm'
+Feb-13 15:15:00.108 [main] DEBUG nextflow.executor.Executor - [warm up] executor > slurm
+Feb-13 15:15:00.115 [main] DEBUG n.processor.TaskPollingMonitor - Creating task monitor for executor 'slurm' > capacity: 100; pollInterval: 5s; dumpInterval: 5m 
+Feb-13 15:15:00.117 [main] DEBUG n.processor.TaskPollingMonitor - >>> barrier register (monitor: slurm)
+Feb-13 15:15:00.119 [main] DEBUG n.executor.AbstractGridExecutor - Creating executor 'slurm' > queue-stat-interval: 1m
+Feb-13 15:15:00.138 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'parse_design:DESIGN_INPUT': maxForks=0; fair=false; array=0
+Feb-13 15:15:00.228 [main] DEBUG n.script.dsl.ProcessConfigBuilder - Config settings `withLabel:qc` matches labels `qc` for process with name qc_bundle_raw:NANOPLOT_RAW
+Feb-13 15:15:00.229 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: slurm
+Feb-13 15:15:00.230 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'slurm'
+Feb-13 15:15:00.231 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'qc_bundle_raw:NANOPLOT_RAW': maxForks=0; fair=false; array=0
+Feb-13 15:15:00.238 [main] DEBUG n.script.dsl.ProcessConfigBuilder - Config settings `withLabel:chopper` matches labels `chopper` for process with name chopper:CHOPPER
+Feb-13 15:15:00.240 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: slurm
+Feb-13 15:15:00.240 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'slurm'
+Feb-13 15:15:00.241 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'chopper:CHOPPER': maxForks=0; fair=false; array=0
+Feb-13 15:15:00.245 [main] DEBUG n.script.dsl.ProcessConfigBuilder - Config settings `withLabel:qc` matches labels `qc` for process with name qc_bundle_post:NANOPLOT_RAW
+Feb-13 15:15:00.246 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: slurm
+Feb-13 15:15:00.246 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'slurm'
+Feb-13 15:15:00.247 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'qc_bundle_post:NANOPLOT_RAW': maxForks=0; fair=false; array=0
+Feb-13 15:15:00.255 [main] WARN  nextflow.script.ScriptBinding - Access to undefined parameter `force_build_mmi` -- Initialise it to a default value eg. `params.force_build_mmi = some_value`
+Feb-13 15:15:00.259 [main] DEBUG n.script.dsl.ProcessConfigBuilder - Config settings `withLabel:minimap2` matches labels `minimap2` for process with name minimap2:MINIMAP2_ALIGN
+Feb-13 15:15:00.261 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: slurm
+Feb-13 15:15:00.261 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'slurm'
+Feb-13 15:15:00.262 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'minimap2:MINIMAP2_ALIGN': maxForks=0; fair=false; array=0
+Feb-13 15:15:00.267 [main] DEBUG n.script.dsl.ProcessConfigBuilder - Config settings `withLabel:deeptools` matches labels `deeptools` for process with name bam_coverage:BAM_TO_BW
+Feb-13 15:15:00.269 [main] DEBUG nextflow.executor.ExecutorFactory - << taskConfig executor: slurm
+Feb-13 15:15:00.269 [main] DEBUG nextflow.executor.ExecutorFactory - >> processorType: 'slurm'
+Feb-13 15:15:00.270 [main] DEBUG nextflow.processor.TaskProcessor - Creating process 'bam_coverage:BAM_TO_BW': maxForks=0; fair=false; array=0
+Feb-13 15:15:00.272 [main] DEBUG nextflow.Session - Workflow process names [dsl2]: LONGQC_RAW, qc_bundle_post:NANOPLOT_RAW, CHOPPER, chopper:CHOPPER, parse_design:DESIGN_INPUT, DESIGN_INPUT, minimap2:MINIMAP2_ALIGN, qc_bundle_raw:NANOPLOT_RAW, MINIMAP2_ALIGN, BAM_TO_BW, MINIMAP2_INDEX, bam_coverage:BAM_TO_BW, NANOPLOT_RAW
+Feb-13 15:15:00.274 [main] DEBUG nextflow.Session - Igniting dataflow network (6)
+Feb-13 15:15:00.275 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > parse_design:DESIGN_INPUT
+Feb-13 15:15:00.275 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > qc_bundle_raw:NANOPLOT_RAW
+Feb-13 15:15:00.275 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > chopper:CHOPPER
+Feb-13 15:15:00.275 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > qc_bundle_post:NANOPLOT_RAW
+Feb-13 15:15:00.275 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > minimap2:MINIMAP2_ALIGN
+Feb-13 15:15:00.276 [main] DEBUG nextflow.processor.TaskProcessor - Starting process > bam_coverage:BAM_TO_BW
+Feb-13 15:15:00.276 [main] DEBUG nextflow.script.ScriptRunner - Parsed script files:
+  Script_078564a3169ea0aa: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/modules/minimap2/main.nf
+  Script_9f3253a345833f25: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/modules/deeptools/main.nf
+  Script_8308412874a82e3a: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/modules/nanoplot/main.nf
+  Script_6a51e650513a7ee9: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/workflows/nanopore/main.nf
+  Script_da5be163e8693b34: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/modules/chopper/main.nf
+  Script_be72eda7cf93dbf2: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/modules/parse_design/main.nf
+  Script_ee83de36279fc548: /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/modules/longqc/main.nf
+Feb-13 15:15:00.276 [main] DEBUG nextflow.script.ScriptRunner - > Awaiting termination 
+Feb-13 15:15:00.276 [main] DEBUG nextflow.Session - Session await
+Feb-13 15:15:00.332 [Actor Thread 1] DEBUG nextflow.container.SingularityCache - Singularity found local store for image=docker://benpasto/rnaseq:latest; path=/fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/workflows/nanopore/singularity/benpasto-rnaseq-latest.img
+Feb-13 15:15:00.548 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process parse_design:DESIGN_INPUT > jobId: 3683010; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/f1/883fe72879b43167f121d2ee32a6b1
+Feb-13 15:15:00.549 [Task submitter] INFO  nextflow.Session - [f1/883fe7] Submitted process > parse_design:DESIGN_INPUT
+Feb-13 15:15:40.128 [Task monitor] DEBUG n.processor.TaskPollingMonitor - Task completed > TaskHandler[jobId: 3683010; id: 1; name: parse_design:DESIGN_INPUT; status: COMPLETED; exit: 0; error: -; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/f1/883fe72879b43167f121d2ee32a6b1 started: 1771013735128; exited: 2026-02-13T20:15:39.481985114Z; ]
+Feb-13 15:15:40.129 [Task monitor] DEBUG nextflow.util.ThreadPoolBuilder - Creating thread pool 'TaskFinalizer' minSize=10; maxSize=15; workQueue=LinkedBlockingQueue[-1]; allowCoreThreadTimeout=false
+Feb-13 15:15:40.161 [TaskFinalizer-1] DEBUG nextflow.util.ThreadPoolBuilder - Creating thread pool 'PublishDir' minSize=10; maxSize=15; workQueue=LinkedBlockingQueue[-1]; allowCoreThreadTimeout=false
+Feb-13 15:15:40.220 [Actor Thread 1] INFO  nextflow.processor.TaskProcessor - [a8/a2d711] Cached process > chopper:CHOPPER (parent_110_chopper)
+Feb-13 15:15:40.220 [Actor Thread 7] INFO  nextflow.processor.TaskProcessor - [2f/31ef21] Cached process > qc_bundle_raw:NANOPLOT_RAW (parent_110_nanoplot_raw)
+Feb-13 15:15:40.242 [Actor Thread 9] INFO  nextflow.processor.TaskProcessor - [a3/0243aa] Cached process > qc_bundle_post:NANOPLOT_RAW (parent_110_nanoplot_raw)
+Feb-13 15:15:40.244 [Actor Thread 3] INFO  nextflow.processor.TaskProcessor - [f0/4ff172] Cached process > minimap2:MINIMAP2_ALIGN (1)
+Feb-13 15:15:40.256 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process qc_bundle_raw:NANOPLOT_RAW (mild_113_nanoplot_raw) > jobId: 3683015; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/c3/b7217839bc47f4bb9ada7ccb26d1cf
+Feb-13 15:15:40.257 [Task submitter] INFO  nextflow.Session - [c3/b72178] Submitted process > qc_bundle_raw:NANOPLOT_RAW (mild_113_nanoplot_raw)
+Feb-13 15:15:40.258 [Actor Thread 5] INFO  nextflow.processor.TaskProcessor - [30/c81067] Cached process > bam_coverage:BAM_TO_BW (parent_110_BAM_to_BW)
+Feb-13 15:15:40.343 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process qc_bundle_raw:NANOPLOT_RAW (severe_112_nanoplot_raw) > jobId: 3683016; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/1c/d5f3bf914374419d44fbbef10fa61a
+Feb-13 15:15:40.343 [Task submitter] INFO  nextflow.Session - [1c/d5f3bf] Submitted process > qc_bundle_raw:NANOPLOT_RAW (severe_112_nanoplot_raw)
+Feb-13 15:15:40.427 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process qc_bundle_raw:NANOPLOT_RAW (parent_111_nanoplot_raw) > jobId: 3683017; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/4d/e6225af22d6e39d0a32797bfe4ea1c
+Feb-13 15:15:40.427 [Task submitter] INFO  nextflow.Session - [4d/e6225a] Submitted process > qc_bundle_raw:NANOPLOT_RAW (parent_111_nanoplot_raw)
+Feb-13 15:15:40.512 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process chopper:CHOPPER (severe_112_chopper) > jobId: 3683018; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/94/77e27da83946809c7bd20a6fd7b974
+Feb-13 15:15:40.513 [Task submitter] INFO  nextflow.Session - [94/77e27d] Submitted process > chopper:CHOPPER (severe_112_chopper)
+Feb-13 15:15:40.597 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process chopper:CHOPPER (mild_113_chopper) > jobId: 3683019; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/c6/2413ff4ca9aa1e912316df99d42cac
+Feb-13 15:15:40.597 [Task submitter] INFO  nextflow.Session - [c6/2413ff] Submitted process > chopper:CHOPPER (mild_113_chopper)
+Feb-13 15:15:40.684 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process chopper:CHOPPER (parent_111_chopper) > jobId: 3683020; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/24/b8d54b57c1b664a8e5e28b5fba5872
+Feb-13 15:15:40.685 [Task submitter] INFO  nextflow.Session - [24/b8d54b] Submitted process > chopper:CHOPPER (parent_111_chopper)
+Feb-13 15:16:10.199 [Task monitor] DEBUG n.processor.TaskPollingMonitor - Task completed > TaskHandler[jobId: 3683018; id: 7; name: chopper:CHOPPER (severe_112_chopper); status: COMPLETED; exit: 0; error: -; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/94/77e27da83946809c7bd20a6fd7b974 started: 1771013770197; exited: 2026-02-13T20:16:06.382780361Z; ]
+Feb-13 15:16:10.205 [Task monitor] DEBUG n.processor.TaskPollingMonitor - Task completed > TaskHandler[jobId: 3683019; id: 8; name: chopper:CHOPPER (mild_113_chopper); status: COMPLETED; exit: 0; error: -; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/c6/2413ff4ca9aa1e912316df99d42cac started: 1771013770202; exited: 2026-02-13T20:16:06.268037355Z; ]
+Feb-13 15:16:10.212 [Task monitor] DEBUG n.processor.TaskPollingMonitor - Task completed > TaskHandler[jobId: 3683020; id: 4; name: chopper:CHOPPER (parent_111_chopper); status: COMPLETED; exit: 0; error: -; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/24/b8d54b57c1b664a8e5e28b5fba5872 started: 1771013770208; exited: 2026-02-13T20:16:06.361114899Z; ]
+Feb-13 15:16:10.301 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process qc_bundle_post:NANOPLOT_RAW (severe_112_nanoplot_raw) > jobId: 3683022; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/56/83ccb536682767e02a186f4942e22b
+Feb-13 15:16:10.301 [Task submitter] INFO  nextflow.Session - [56/83ccb5] Submitted process > qc_bundle_post:NANOPLOT_RAW (severe_112_nanoplot_raw)
+Feb-13 15:16:10.383 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process minimap2:MINIMAP2_ALIGN (2) > jobId: 3683023; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/be/bb0c8f38957921c972241c33d8a711
+Feb-13 15:16:10.384 [Task submitter] INFO  nextflow.Session - [be/bb0c8f] Submitted process > minimap2:MINIMAP2_ALIGN (2)
+Feb-13 15:16:10.473 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process qc_bundle_post:NANOPLOT_RAW (mild_113_nanoplot_raw) > jobId: 3683024; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/1a/3e518c6ab1caae46e2f2e909675518
+Feb-13 15:16:10.473 [Task submitter] INFO  nextflow.Session - [1a/3e518c] Submitted process > qc_bundle_post:NANOPLOT_RAW (mild_113_nanoplot_raw)
+Feb-13 15:16:10.555 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process minimap2:MINIMAP2_ALIGN (3) > jobId: 3683025; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/10/3ad50a04cc83756d5dc52d365e2d8d
+Feb-13 15:16:10.555 [Task submitter] INFO  nextflow.Session - [10/3ad50a] Submitted process > minimap2:MINIMAP2_ALIGN (3)
+Feb-13 15:16:10.638 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process minimap2:MINIMAP2_ALIGN (4) > jobId: 3683026; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/93/e4d606dc1d7e9de6d0f24ca31717da
+Feb-13 15:16:10.638 [Task submitter] INFO  nextflow.Session - [93/e4d606] Submitted process > minimap2:MINIMAP2_ALIGN (4)
+Feb-13 15:16:10.720 [Task submitter] DEBUG nextflow.executor.GridTaskHandler - [SLURM] submitted process qc_bundle_post:NANOPLOT_RAW (parent_111_nanoplot_raw) > jobId: 3683027; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/2d/9b0f2022f9cabeefaef8603c05e9b3
+Feb-13 15:16:10.720 [Task submitter] INFO  nextflow.Session - [2d/9b0f20] Submitted process > qc_bundle_post:NANOPLOT_RAW (parent_111_nanoplot_raw)
+Feb-13 15:16:15.128 [Task monitor] DEBUG n.processor.TaskPollingMonitor - Task completed > TaskHandler[jobId: 3683015; id: 9; name: qc_bundle_raw:NANOPLOT_RAW (mild_113_nanoplot_raw); status: COMPLETED; exit: 1; error: -; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/c3/b7217839bc47f4bb9ada7ccb26d1cf started: 1771013770128; exited: 2026-02-13T20:16:11.300285397Z; ]
+Feb-13 15:16:15.131 [Task monitor] DEBUG n.processor.TaskPollingMonitor - Task completed > TaskHandler[jobId: 3683016; id: 6; name: qc_bundle_raw:NANOPLOT_RAW (severe_112_nanoplot_raw); status: COMPLETED; exit: 1; error: -; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/1c/d5f3bf914374419d44fbbef10fa61a started: 1771013770192; exited: 2026-02-13T20:16:11.235318385Z; ]
+Feb-13 15:16:15.134 [Task monitor] DEBUG n.processor.TaskPollingMonitor - Task completed > TaskHandler[jobId: 3683017; id: 5; name: qc_bundle_raw:NANOPLOT_RAW (parent_111_nanoplot_raw); status: COMPLETED; exit: 1; error: -; workDir: /fs/scratch/PAS0631/nanopore_tmp_vicki/4d/e6225af22d6e39d0a32797bfe4ea1c started: 1771013770195; exited: 2026-02-13T20:16:11.20546364Z; ]
+Feb-13 15:16:15.134 [TaskFinalizer-5] DEBUG nextflow.processor.TaskProcessor - Handling unexpected condition for
+  task: name=qc_bundle_raw:NANOPLOT_RAW (mild_113_nanoplot_raw); work-dir=/fs/scratch/PAS0631/nanopore_tmp_vicki/c3/b7217839bc47f4bb9ada7ccb26d1cf
+  error [nextflow.exception.ProcessFailedException]: Process `qc_bundle_raw:NANOPLOT_RAW (mild_113_nanoplot_raw)` terminated with an error exit status (1)
+Feb-13 15:16:15.163 [TaskFinalizer-5] ERROR nextflow.processor.TaskProcessor - Error executing process > 'qc_bundle_raw:NANOPLOT_RAW (mild_113_nanoplot_raw)'
+
+Caused by:
+  Process `qc_bundle_raw:NANOPLOT_RAW (mild_113_nanoplot_raw)` terminated with an error exit status (1)
+
+
+Command executed:
+
+  #!/bin/bash
+  
+  name=$(basename /fs/ess/PAS0631/113_mild/mild_113.fastq.gz .fastq.gz)
+  
+  singularity run \
+      docker://staphb/nanoplot:latest \
+      NanoPlot \
+      -t 25 \
+      -o ${PWD}/${name} \
+      --fastq /fs/ess/PAS0631/113_mild/mild_113.fastq.gz \
+      --loglength \
+      --N50 \
+      --tsv_stats
+
+Command exit status:
+  1
+
+Command output:
+  (empty)
+
+Command error:
+  INFO:    Using cached SIF image
+  INFO:    gocryptfs not found, will not be able to use gocryptfs
+  WARNING:root:Plotly could not fetch or find Chrome automatically. Static exports may fail unless BROWSER_PATH is set. Details: [Errno 30] Read-only file system: '/usr/local/lib/python3.10/dist-packages/choreographer/cli/browser_exe'
+  ERROR:root:Nanoget: File provided doesn't exist or the path is incorrect: /fs/ess/PAS0631/113_mild/mild_113.fastq.gz
+  File provided doesn't exist or the path is incorrect: /fs/ess/PAS0631/113_mild/mild_113.fastq.gz
+
+Work dir:
+  /fs/scratch/PAS0631/nanopore_tmp_vicki/c3/b7217839bc47f4bb9ada7ccb26d1cf
+
+Tip: you can replicate the issue by changing to the process work dir and entering the command `bash .command.run`
+Feb-13 15:16:15.164 [TaskFinalizer-7] DEBUG nextflow.processor.TaskProcessor - Handling unexpected condition for
+  task: name=qc_bundle_raw:NANOPLOT_RAW (parent_111_nanoplot_raw); work-dir=/fs/scratch/PAS0631/nanopore_tmp_vicki/4d/e6225af22d6e39d0a32797bfe4ea1c
+  error [nextflow.exception.ProcessFailedException]: Process `qc_bundle_raw:NANOPLOT_RAW (parent_111_nanoplot_raw)` terminated with an error exit status (1)
+Feb-13 15:16:15.165 [TaskFinalizer-6] DEBUG nextflow.processor.TaskProcessor - Handling unexpected condition for
+  task: name=qc_bundle_raw:NANOPLOT_RAW (severe_112_nanoplot_raw); work-dir=/fs/scratch/PAS0631/nanopore_tmp_vicki/1c/d5f3bf914374419d44fbbef10fa61a
+  error [nextflow.exception.ProcessFailedException]: Process `qc_bundle_raw:NANOPLOT_RAW (severe_112_nanoplot_raw)` terminated with an error exit status (1)
+Feb-13 15:16:15.165 [TaskFinalizer-5] DEBUG nextflow.Session - Session aborted -- Cause: Process `qc_bundle_raw:NANOPLOT_RAW (mild_113_nanoplot_raw)` terminated with an error exit status (1)
+Feb-13 15:16:15.177 [TaskFinalizer-5] DEBUG nextflow.Session - The following nodes are still active:
+[process] bam_coverage:BAM_TO_BW
+  status=ACTIVE
+  port 0: (queue) OPEN  ; channel: -
+  port 1: (cntrl) -     ; channel: $
+
+Feb-13 15:16:15.183 [TaskFinalizer-5] WARN  n.processor.TaskPollingMonitor - Killing running tasks (6)
+Feb-13 15:16:15.241 [TaskFinalizer-5] DEBUG n.trace.WorkflowStatsObserver - Workflow completed > WorkflowStats[succeededCount=4; failedCount=3; ignoredCount=0; cachedCount=5; pendingCount=0; submittedCount=0; runningCount=0; retriesCount=0; abortedCount=6; succeedDuration=1m 20s; failedDuration=6m 12s; cachedDuration=2h 42m 3s;loadCpus=0; loadMemory=0; peakRunning=6; peakCpus=150; peakMemory=0; ]
+Feb-13 15:16:15.378 [Task monitor] DEBUG n.processor.TaskPollingMonitor - <<< barrier arrives (monitor: slurm) - terminating tasks monitor poll loop
+Feb-13 15:16:15.378 [main] DEBUG nextflow.Session - Session await > all processes finished
+Feb-13 15:16:15.379 [main] DEBUG nextflow.Session - Session await > all barriers passed
+Feb-13 15:16:15.381 [main] DEBUG n.trace.WorkflowStatsObserver - Workflow completed > WorkflowStats[succeededCount=4; failedCount=3; ignoredCount=0; cachedCount=5; pendingCount=0; submittedCount=0; runningCount=0; retriesCount=0; abortedCount=6; succeedDuration=1m 20s; failedDuration=6m 12s; cachedDuration=2h 42m 3s;loadCpus=0; loadMemory=0; peakRunning=6; peakCpus=150; peakMemory=0; ]
+Feb-13 15:16:15.392 [main] DEBUG nextflow.cache.CacheDB - Closing CacheDB done
+Feb-13 15:16:15.421 [main] DEBUG nextflow.script.ScriptRunner - > Execution complete -- Goodbye

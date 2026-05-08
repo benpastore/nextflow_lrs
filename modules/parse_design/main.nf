@@ -1,8 +1,7 @@
 
-
 process DESIGN_INPUT {
 
-    label 'local'
+    label 'low'
 
     publishDir "$params.results/samples", mode : 'copy', pattern : "*csv"
 
@@ -11,7 +10,7 @@ process DESIGN_INPUT {
 
     output : 
         path("fastq.csv"), emit : fastq_ch
-        path("replicates.csv"), emit : condition_ch
+        //path("replicates.csv"), emit : condition_ch
 
     script : 
     """

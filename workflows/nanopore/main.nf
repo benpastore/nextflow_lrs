@@ -186,6 +186,17 @@ workflow bam_coverage {
 
 }
 
+workflow medaka { 
+    
+    take : 
+        data
+        reference
+    
+    main : 
+        MEDAKA( data, reference )
+
+}
+
 /*
 ////////////////////////////////////////////////////////////f=////////
 workflow
@@ -217,6 +228,13 @@ workflow {
     // longqc post 
     // nanoplot post
     qc_bundle_post( chopper.out.reads )
+
+    // medaka 
+    if (params.medaka) {
+
+        MEDAKA( chopper.out.reads, params.genome )
+
+    }
 
     // minimap2
     minimap2( chopper.out.reads )

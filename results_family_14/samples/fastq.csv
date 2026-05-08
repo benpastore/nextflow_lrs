@@ -1,0 +1,5 @@
+simple_name,Reads
+parent_110,/fs/ess/PAS0631/110_parent/parent_110.fastq.gz
+111_parent,/fs/ess/PAS0631/111_parent/111_parent.fastq.gz
+112_severe,/fs/ess/PAS0631/112_severe/112_severe.fastq.gz
+113_mild,/fs/ess/PAS0631/113_mild/113_mild.fastq.gz

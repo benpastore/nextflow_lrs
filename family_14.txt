@@ -1,0 +1,5 @@
+Reads	Condition
+/fs/ess/PAS0631/110_parent/parent_110.fastq.gz	parent_110
+/fs/ess/PAS0631/111_parent/111_parent.fastq.gz	parent_111
+/fs/ess/PAS0631/112_severe/112_severe.fastq.gz	severe_112
+/fs/ess/PAS0631/113_mild/113_mild.fastq.gz	mild_113

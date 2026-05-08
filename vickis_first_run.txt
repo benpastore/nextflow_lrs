@@ -1,0 +1,9 @@
+Reads	Condition						
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE10705_pass_11b72759_184fa4e4_0.fastq.gz	test_run						
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE11458_pass_91a624c1_9ddc8b0b_1.fastq.gz	test_run		file	PBE11458_pass_91a624c1_9ddc8b0b_6.fastq.gz		58.95 MB	11/21/25 11:51
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE11458_pass_91a624c1_9ddc8b0b_2.fastq.gz	test_run		file	PBE11458_pass_91a624c1_9ddc8b0b_7.fastq.gz			
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE11458_pass_91a624c1_9ddc8b0b_3.fastq.gz	test_run						
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE11458_pass_91a624c1_9ddc8b0b_4.fastq.gz	test_run						
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE11458_pass_91a624c1_9ddc8b0b_5.fastq.gz	test_run						
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE11458_pass_91a624c1_9ddc8b0b_6.fastq.gz	test_run						
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE11458_pass_91a624c1_9ddc8b0b_7.fastq.gz	test_run						

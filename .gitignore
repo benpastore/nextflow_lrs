@@ -9,3 +9,13 @@
 *.fastq
 *.fq
 *.fasta
+*.img
+*.nextflow.log
+index/
+null/
+results/
+raw_data/
+*.out
+z_old/
+genomes/
+.nextflow/

@@ -67,7 +67,49 @@ process MINIMAP2_ALIGN {
     singularity run \\
         docker://biocontainers/samtools:v1.9-4-deb_cv1 \\
         samtools index -@ ${task.cpus} \${name}.minimap2.sorted.bam
-
     """
 
+}
+
+process MAP_READS_TO_ASSEMBLY {
+
+    tag "${params.sample_id}"
+    label 'minimap2'
+    publishDir "${params.results}/assembly/read_to_assembly", mode: params.publish_mode
+
+    input:
+        tuple val(sampleID), val(fastq), val(asm_fa), val(asm_fai)
+
+    output:
+        tuple val(sampleID), path(asm_fa), path(asm_fai), path("*.bam"), path("*.bai"), emit : alignment
+
+    script:
+    """
+    minimap2 -t ${task.cpus} \
+        -ax map-ont ${asm} \
+        ${reads} | samtools sort -@ ${task.cpus} -o ${sampleID}_align_reads_to_assembly.sorted.bam
+
+    samtools index ${sampleID}_align_reads_to_assembly.sorted.bam
+    """
+}
+
+process ALIGN_HAPLOTYPES_TO_REFERENCE {
+    
+    tag "${sampleID}"
+    publishDir "${params.results}/assembly/haplotype_alignments", mode: params.publish_mode
+
+    input:
+        val(ref)
+        tuple val(sampleID), val(hap1), val(hap2)
+
+    output:
+        tuple val(sampleID), path("*hap1*"), path("*hap2*"), emit : aligned_haplotypes
+    path "*hap1_to_ref.paf"
+    path "*hap2_to_ref.paf"
+
+    script:
+    """
+    minimap2 -t ${task.cpus} -x asm5 ${ref} ${hap1} > ${sampleID}_hap1_to_ref.paf
+    minimap2 -t ${task.cpus} -x asm5 ${ref} ${hap2} > ${sampleID}_hap2_to_ref.paf
+    """
 }

@@ -1,0 +1,2 @@
+Reads	Condition
+/fs/ess/PAS0631/00_long_read_seq_ben/2025_09_12/NBT1/fastq_pass/PBE10705_pass_11b72759_184fa4e4_0.fastq.gz	test_run
