@@ -19,3 +19,4 @@ raw_data/
 z_old/
 genomes/
 .nextflow/
+.nextflow.log*
