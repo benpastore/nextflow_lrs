@@ -130,7 +130,7 @@ workflow {
     if (params.outprefix) { ; } else {'Outprefix not specified! Defaulting to ONT_ANALYSIS'; params.outprefix = 'ONT_ANALYSIS' }
 
     ////////////////// parse design
-    
+
         parse_design( params.design )
         ont_reads = parse_design.out.ont
         ont_illumina = parse_design.out.ont_illumina
@@ -175,7 +175,7 @@ workflow {
         // go directly into dipcall from hifiasm 
 
         //2. convert hifasim to fasta 
-        if (params.debug) { println("CONVERT HIFASIM ASM TO FASTA") }
+        //if (params.debug) { println("CONVERT HIFASIM ASM TO FASTA") }
         gfatools( hifasim.out.hifasim_asm )
         gfatools.out.fasta_asm.view()
 
@@ -183,6 +183,7 @@ workflow {
         // nanopolish( illumina_reads, hifasim_asm )
 
         // include dorado polish
+        
 
         //3. map reads ontol assembled genome
         // merge gfatools output to reads
@@ -199,12 +200,16 @@ workflow {
 
         //2. run dip call
         // index the reference genome quickly for dipcall 
-        INDEX_REFERENCE( params.genome )
-        dipcall( hapdup_phase.out.hapdup_output,  INDEX_REFERENCE.out.ref_indexed_ch )
-        dipcall.out.dipcall.view()
+        //INDEX_REFERENCE( params.genome )
+        //dipcall( hapdup_phase.out.hapdup_output,  INDEX_REFERENCE.out.ref_indexed_ch )
+        //dipcall.out.dipcall.view()
 
         // END 
         return 0
+
+}
+
+/*
 
     ////////////////// VARIANT CALLING SECTION -- From alignment & haplotype phasing /////////////////////
         // MAP READS TO REFERENCE GENOME
@@ -261,4 +266,4 @@ workflow {
      - longphase (could be used instead of whathap)
      - hapdiff (think this does variant calling from the de novo assembled genomes)
      */
-}
+//}

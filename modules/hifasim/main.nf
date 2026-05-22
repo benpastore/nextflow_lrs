@@ -8,13 +8,22 @@ process HIFASIM {
         tuple val(sampleID), val(reads) 
 
     output : 
-        tuple val(sampleID), val(reads), path("*.asm"), emit : hifasim_asm
+        tuple val(sampleID), val(reads), path("*hap1.p_ctg.gfa"), path("*hap2.p_ctg.gfa"), emit : hifasim_asm
+        path("*")
 
     script : 
     """
     #!/bin/bash
 
-    hifiasm -t64 -o ${sampleID}.asm ${reads}
+    singularity run \\
+        docker://benpasto/hifiasm:latest \\
+        -t64 \\
+        --ont \\
+        -o ${sampleID} \\
+        ${reads}
+
+    #hifiasm -t64 -o ${sampleID}.asm ${reads}
+    hap1.p_ctg.gfa
 
     """
 }
