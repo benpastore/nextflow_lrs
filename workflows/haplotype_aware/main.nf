@@ -1,5 +1,14 @@
 #!/usr/bin/env nextflow
 
+
+/*
+Discussion points for meeting
+
+- hifiasm vs verkko 
+- pepper, margin?
+- quality assesment of assembly
+/*
+
 /*
 ========================================================================================
                          long read sequencing pipeline
@@ -120,8 +129,8 @@ workflow {
     if (params.genome)    { ch_genome = file(params.genome, checkIfExists: true) } else { exit 1, 'Genome fasta not specified!' }
     if (params.outprefix) { ; } else {'Outprefix not specified! Defaulting to ONT_ANALYSIS'; params.outprefix = 'ONT_ANALYSIS' }
 
-    ////////////////// 
-        // parse design 
+    ////////////////// parse design
+    
         parse_design( params.design )
         ont_reads = parse_design.out.ont
         ont_illumina = parse_design.out.ont_illumina
@@ -131,10 +140,6 @@ workflow {
             // for debugging view ont reads
             ont_reads.view() 
         }
-
-        // Index reference genome
-        //if (params.debug) { println("INDEXING REFERENCE") }
-        //index_reference( params.genome )
 
     /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
 
@@ -161,8 +166,13 @@ workflow {
     ////////////////// ASSEMBLY SECTION /////////////////////
         //1. Hifasim: assemble ont reads  
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
-        hifasim( ont_reads ) // check hifiasm 
+        hifasim( ont_reads ) // check hifiasm version
         hifasim.out.hifasim_asm.view()
+
+        // Include an if else here to use verkko instead (may not need to use gfatools, depending on verkko output)
+        // assembly QC & polishing with medaka
+        // # contigs, % completeness, contig size 
+        // go directly into dipcall from hifiasm 
 
         //2. convert hifasim to fasta 
         if (params.debug) { println("CONVERT HIFASIM ASM TO FASTA") }
@@ -172,18 +182,20 @@ workflow {
         // use nanopolish (not incorporated yet)
         // nanopolish( illumina_reads, hifasim_asm )
 
+        // include dorado polish
+
         //3. map reads ontol assembled genome
         // merge gfatools output to reads
-        if (params.debug) { println("JOIN ASSEMBLY TO FASTQ AND MAP READS TO REFERENCE") }
-        asm_alignment_ch = ont_reads.join(gfatools.out.fasta_asm)
-        asm_alignment_ch.view()
+        //if (params.debug) { println("JOIN ASSEMBLY TO FASTQ AND MAP READS TO REFERENCE") }
+        //asm_alignment_ch = ont_reads.join(gfatools.out.fasta_asm)
+        //asm_alignment_ch.view()
 
-        map_reads_to_assembly( asm_alignment_ch )
-        map_reads_to_assembly.out.assembly_alignment.view()
+        //map_reads_to_assembly( asm_alignment_ch )
+        //map_reads_to_assembly.out.assembly_alignment.view()
 
         //4. perform phasing with hapdup
-        hapdup_phase( map_reads_to_assembly.out.assembly_alignment )
-        hapdup_phase.out.hapdup_output.view()
+        //hapdup_phase( map_reads_to_assembly.out.assembly_alignment )
+        //hapdup_phase.out.hapdup_output.view()
 
         //2. run dip call
         // index the reference genome quickly for dipcall 
@@ -232,7 +244,7 @@ workflow {
             }
    
         // whats haplotype phase on clair3, in future can also run dv -> merge with clair3 -> run haplotype phasing
-        // can also run something called longphase
+        // can also run something called longphase ( use long phase )
         whatshap_phase( params.genome, vcf_bam_ch )
 
         // whatshap happlotag
