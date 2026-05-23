@@ -39,7 +39,7 @@ if (params.help) {
 }
 
 params.bin = "${params.base}/../../bin"
-params.index = "${params.base}/../../index"
+params.index = "${params.base}/index"
 /*
 ////////////////////////////////////////////////////////////////////
 Enable dls2 language --> import modules
@@ -241,10 +241,10 @@ workflow {
         whatshap_haplotag( params.genome, whatshap_phase.out.whatshap_phase_ch )
 
         // sniffles (SV calling)
-        sniffles( whathap_haplotag.out.whatshap_haplotag )
+        sniffles( whatshap_haplotag.out.whatshap_haplotag )
 
         // straggler
-        straglr( whathap_haplotag.out.whatshap_haplotag )
+        straglr( whatshap_haplotag.out.whatshap_haplotag )
 
     /*
     - https://github.com/epi2me-labs/wf-human-variation
