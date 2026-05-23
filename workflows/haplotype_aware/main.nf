@@ -60,6 +60,7 @@ include { deepvariant } from '../../subworkflows/illumina.nf'
 /////////////// ONT //////////////////
 include { hifasim } from '../../subworkflows/ont.nf'
 include { gfatools } from '../../subworkflows/ont.nf'
+include { dorado } from '../../subworkflows/ont.nf'
 include { map_reads_to_assembly } from '../../subworkflows/ont.nf'
 include { hapdup_phase } from '../../subworkflows/ont.nf'
 include { INDEX_REFERENCE } from '../../modules/samtools/main.nf'
@@ -71,6 +72,7 @@ include { sniffles } from '../../subworkflows/ont.nf'
 include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
 include { dipcall } from '../../subworkflows/ont.nf'
+include { NANOPLOT_RAW } from '../../modules/nanoplot/main.nf'
 
 workflow parse_design {
     take : 
@@ -115,11 +117,6 @@ workflow parse_design {
 
 workflow { 
 
-    params.debug = true
-    println params.debug
-
-    params.use_illumina = false
-    println params.use_illumina
     /*
     ////////////////////////////////////////////////////////////////////
     Validate mandatory inputs (design, genome, junctions, results, outprefix)
@@ -162,6 +159,9 @@ workflow {
         } else { 
             if (params.debug) { println("SKIPPING ILLUMINA") }
         }
+        
+    /////////////////// prelim QC on nanopore reads 
+        NANOPLOT_RAW( ont_reads )
 
     ////////////////// ASSEMBLY SECTION /////////////////////
         //1. Hifasim: assemble ont reads  
@@ -174,42 +174,27 @@ workflow {
         // # contigs, % completeness, contig size 
         // go directly into dipcall from hifiasm 
 
+        // minimira --> remove ligation based artifacts
+        // use jasmine to combine variant calls from multiple callers
+        // use busco to assess quality of assembly
+
         //2. convert hifasim to fasta 
         //if (params.debug) { println("CONVERT HIFASIM ASM TO FASTA") }
         gfatools( hifasim.out.hifasim_asm )
-        gfatools.out.fasta_asm.view()
-
-        // use nanopolish (not incorporated yet)
-        // nanopolish( illumina_reads, hifasim_asm )
 
         // include dorado polish
-        
-
-        //3. map reads ontol assembled genome
-        // merge gfatools output to reads
-        //if (params.debug) { println("JOIN ASSEMBLY TO FASTQ AND MAP READS TO REFERENCE") }
-        //asm_alignment_ch = ont_reads.join(gfatools.out.fasta_asm)
-        //asm_alignment_ch.view()
-
-        //map_reads_to_assembly( asm_alignment_ch )
-        //map_reads_to_assembly.out.assembly_alignment.view()
-
-        //4. perform phasing with hapdup
-        //hapdup_phase( map_reads_to_assembly.out.assembly_alignment )
-        //hapdup_phase.out.hapdup_output.view()
+        if (params.dorado) { 
+            dorado( gfatools.out.fasta_asm )
+            genome_asm_ch = dorado.out.dorado_output_ch
+        } else { 
+            genome_asm_ch = gfatools.out.haplotype_asm
+        }
 
         //2. run dip call
         // index the reference genome quickly for dipcall 
-        //INDEX_REFERENCE( params.genome )
-        //dipcall( hapdup_phase.out.hapdup_output,  INDEX_REFERENCE.out.ref_indexed_ch )
-        //dipcall.out.dipcall.view()
-
-        // END 
-        return 0
-
-}
-
-/*
+        INDEX_REFERENCE( params.genome )
+        dipcall( genome_asm_ch,  INDEX_REFERENCE.out.ref_indexed_ch )
+        dipcall.out.dipcall.view()
 
     ////////////////// VARIANT CALLING SECTION -- From alignment & haplotype phasing /////////////////////
         // MAP READS TO REFERENCE GENOME
@@ -266,4 +251,4 @@ workflow {
      - longphase (could be used instead of whathap)
      - hapdiff (think this does variant calling from the de novo assembled genomes)
      */
-//}
+}

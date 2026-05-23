@@ -1,0 +1,26 @@
+process DORADO { 
+
+    label 'dorado'
+
+    input : 
+        tuple val(sampleID), val(reads), val(hapfasta), val(hapfai)
+    
+    output : 
+        tuple val(sampleID), val(reads), path("*hap1.polished.fa"), path("*hap2.polished.fa"), emit : dorado_output_ch
+    
+    script : 
+    """
+    #!/bin/bash
+    
+    export TF_FORCE_UNIFIED_MEMORY='1'
+
+    dorado aligner ${hapfasta} ${reads} | samtools sort --threads ${task.cpus} > aligned_reads.bam
+    samtools index aligned_reads.bam
+
+    dorado polish aligned_reads.bam ${hapfasta} > polished_assembly.fasta
+
+    awk '/^>hap1_/ {p=1} /^>hap2_/ {p=0} p' polished_assembly.fasta > ${sampleID}.hap1.polished.fa
+    awk '/^>hap2_/ {p=1} /^>hap1_/ {p=0} p' polished_assembly.fasta > ${sampleID}.hap2.polished.fa
+
+    """
+}

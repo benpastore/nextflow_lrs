@@ -23,7 +23,7 @@ process HIFASIM {
         ${reads}
 
     #hifiasm -t64 -o ${sampleID}.asm ${reads}
-    hap1.p_ctg.gfa
+    #hap1.p_ctg.gfa
 
     """
 }

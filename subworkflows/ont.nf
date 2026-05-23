@@ -15,6 +15,7 @@ workflow hifasim {
 }
 
 include { GFA_CONVERT } from '../modules/gfatools/main.nf'
+include { GFA_FAIDX } from '../modules/gfatools/main.nf'
 workflow gfatools { 
     
     take : 
@@ -22,9 +23,25 @@ workflow gfatools {
     
     main : 
         GFA_CONVERT( data )
+        GFA_FAIDX( GFA_CONVERT.out.combined_fa )
     
     emit : 
-        fasta_asm = GFA_CONVERT.out.fasta_asm
+        fasta_asm = GFA_FAIDX.out.fasta_asm
+        haplotype_asm = GFA_FAIDX.out.haplotype_fasta_asm
+}
+
+include { DORADO } from '../modules/dorado/main.nf'
+workflow dorado { 
+
+    take : 
+        data 
+    
+    main : 
+        DORADO( data )
+    
+    emit : 
+        dorado_output_ch = DORADO.out.dorado_output_ch
+
 }
 
 include { MAP_READS_TO_ASSEMBLY } from '../modules/minimap2/main.nf'
