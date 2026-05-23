@@ -201,7 +201,7 @@ workflow {
         minimap2( ont_reads )
 
         // clair3 call variants 
-        clair3( minimap2.out.bams)
+        clair3( INDEX_REFERENCE.out.ref_indexed_ch, minimap2.out.bams )
 
         // spectre copy number variant caller 
         spectre_input_ch = minimap2.out.bams
@@ -235,10 +235,10 @@ workflow {
    
         // whats haplotype phase on clair3, in future can also run dv -> merge with clair3 -> run haplotype phasing
         // can also run something called longphase ( use long phase )
-        whatshap_phase( params.genome, vcf_bam_ch )
+        whatshap_phase( INDEX_REFERENCE.out.ref_indexed_ch, vcf_bam_ch )
 
         // whatshap happlotag
-        whatshap_haplotag( params.genome, whatshap_phase.out.whatshap_phase_ch )
+        whatshap_haplotag( INDEX_REFERENCE.out.ref_indexed_ch, whatshap_phase.out.whatshap_phase_ch )
 
         // sniffles (SV calling)
         sniffles( whatshap_haplotag.out.whatshap_haplotag )
