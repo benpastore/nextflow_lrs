@@ -2,4 +2,4 @@
 
 sh run.sh \
     --design /fs/ess/PAS0631/00_vicki/pipelines/nextflow_lrs/workflows/haplotype_aware/debug_design.tsv \
-    --results /fs/scratch/PAS0631/AAA_DEBUG_HAPLO_AWARE/05_22_2026 
+    --results /fs/scratch/PAS0631/AAA_DEBUG_HAPLO_AWARE/05_22_2026 -resume

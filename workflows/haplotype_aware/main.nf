@@ -68,6 +68,7 @@ include { minimap2 } from '../../subworkflows/ont.nf'
 include { clair3 } from '../../subworkflows/ont.nf'
 include { whatshap_phase } from '../../subworkflows/ont.nf'
 include { whatshap_haplotag } from '../../subworkflows/ont.nf'
+include { longphase } from '../../subworkflows/ont.nf'
 include { sniffles } from '../../subworkflows/ont.nf'
 include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
@@ -164,6 +165,8 @@ workflow {
         NANOPLOT_RAW( ont_reads )
 
     ////////////////// ASSEMBLY SECTION /////////////////////
+    params.assemble_genome = false
+    if (params.assemble_genome) { 
         //1. Hifasim: assemble ont reads  
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
         hifasim( ont_reads ) // check hifiasm version
@@ -195,13 +198,18 @@ workflow {
         INDEX_REFERENCE( params.genome )
         dipcall( genome_asm_ch,  INDEX_REFERENCE.out.ref_indexed_ch )
         dipcall.out.dipcall.view()
-
+    } else { 
+        INDEX_REFERENCE( params.genome )
+    }
     ////////////////// VARIANT CALLING SECTION -- From alignment & haplotype phasing /////////////////////
+    params.alignment_based_variant_calling = true
+    if (params.alignment_based_variant_calling) { 
         // MAP READS TO REFERENCE GENOME
         minimap2( ont_reads )
 
         // clair3 call variants 
         clair3( INDEX_REFERENCE.out.ref_indexed_ch, minimap2.out.bams )
+
 
         // spectre copy number variant caller 
         spectre_input_ch = minimap2.out.bams
@@ -210,7 +218,9 @@ workflow {
                 tuple(sampleID, bam, bai, ref_fa, ref_fai)
             }
         spectre( spectre_input_ch )
+        
 
+        /*
         // mix the variant outputs
         if ( params.use_illumina ) {
             clair3_vcf_ch = clair3.out.clair3_ch
@@ -226,26 +236,39 @@ workflow {
         } else { 
             variants_ch = clair3.out.clair3_ch
         }
+        */
+
+        variants_ch = clair3.out.clair3_ch
 
         vcf_bam_ch = variants_ch
             .join(minimap2.out.bams)
-            .map { sampleID, caller, vcf, tbi, bam, bai ->
-                tuple(sampleID, caller, vcf, tbi, bam, bai)
+            .map { sampleID, vcf, tbi, bam, bai ->
+                tuple(sampleID, vcf, tbi, bam, bai)
             }
-   
-        // whats haplotype phase on clair3, in future can also run dv -> merge with clair3 -> run haplotype phasing
-        // can also run something called longphase ( use long phase )
-        whatshap_phase( INDEX_REFERENCE.out.ref_indexed_ch, vcf_bam_ch )
+        
+        if (params.phasing_tool == "whatshap") { 
+            // whats haplotype phase on clair3, in future can also run dv -> merge with clair3 -> run haplotype phasing
+            // can also run something called longphase ( use long phase )
+            whatshap_phase( INDEX_REFERENCE.out.ref_indexed_ch, vcf_bam_ch )
 
-        // whatshap happlotag
-        whatshap_haplotag( INDEX_REFERENCE.out.ref_indexed_ch, whatshap_phase.out.whatshap_phase_ch )
+            // whatshap happlotag
+            whatshap_haplotag( INDEX_REFERENCE.out.ref_indexed_ch, whatshap_phase.out.whatshap_phase_ch )
 
+            haplo_ch = whatshap_haplotag.out.whatshap_haplotag
+        } else { 
+            
+            longphase( INDEX_REFERENCE.out.ref_indexed_ch, vcf_bam_ch )
+
+            haplo_ch = longphase.out.longphase_ch
+
+        }
         // sniffles (SV calling)
-        sniffles( whatshap_haplotag.out.whatshap_haplotag )
+        sniffles( haplo_ch )
 
-        // straggler
-        straglr( whatshap_haplotag.out.whatshap_haplotag )
+        // straggler (expansion repeats)
+        straglr( haplo_ch, INDEX_REFERENCE.out.ref_indexed_ch )
 
+    }
     /*
     - https://github.com/epi2me-labs/wf-human-variation
      - longphase (could be used instead of whathap)

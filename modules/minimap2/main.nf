@@ -18,7 +18,9 @@ process MINIMAP2_INDEX {
     """
     #!/bin/bash
 
-    genome_name=\$(basename ${genome} .fa)
+    genome_name=\$(basename "${genome}")
+    genome_name=\${genome_name%.fa}
+    genome_name=\${genome_name%.fna}
     cp ${genome} \${genome_name}
 
     singularity run \\
@@ -41,12 +43,12 @@ process MINIMAP2_ALIGN {
         tuple val(sampleID), val(fastq) 
     
     output : 
-        tuple val(sampleID), path("*.bam"), path("*.bai"), emit : bam_ch
+        tuple val(sampleID), path("*.10pct.bam"), path("*.10pct.bam.bai"), emit : bam_ch
 
     script : 
     """
     #!/bin/bash
-    
+        
     name=\$(basename ${fastq} .fastq.gz)
 
     singularity run \\
@@ -67,6 +69,15 @@ process MINIMAP2_ALIGN {
     singularity run \\
         docker://biocontainers/samtools:v1.9-4-deb_cv1 \\
         samtools index -@ ${task.cpus} \${name}.minimap2.sorted.bam
+
+    singularity run \\
+        docker://biocontainers/samtools:v1.9-4-deb_cv1 \\
+        samtools view -@ ${task.cpus} -s 42.10 -b \${name}.minimap2.sorted.bam > \${name}.minimap2.sorted.10pct.bam
+    
+    singularity run \\
+        docker://biocontainers/samtools:v1.9-4-deb_cv1 \\
+        samtools index -@ ${task.cpus} \${name}.minimap2.sorted.10pct.bam
+
     """
 
 }

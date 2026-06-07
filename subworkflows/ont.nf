@@ -125,9 +125,11 @@ workflow minimap2 {
 include { CLAIR3 } from '../modules/clair3/main.nf'
 workflow clair3 { 
     take : 
-        data 
+        ref 
+        data
+
     main : 
-        CLAIR3( params.genome, data )
+        CLAIR3( ref, data )
     emit : 
         clair3_ch = CLAIR3.out.clair3_ch
 }
@@ -156,15 +158,32 @@ workflow whatshap_haplotag {
 
 }
 
+include { LONGPHASE } from '../modules/longphase/main.nf'
+workflow longphase { 
+
+    take : 
+        ref
+        data
+    main : 
+        LONGPHASE( ref, data )
+    emit : 
+        longphase_ch = LONGPHASE.out.longphase_ch        
+
+
+}
+
 include { SNIFFLES } from '../modules/sniffles/main.nf'
+include { INDEX_SNIFFLES_VCF } from '../modules/sniffles/main.nf'
 workflow sniffles { 
 
     take : 
         data 
     main : 
         SNIFFLES( data )
+        INDEX_SNIFFLES_VCF( SNIFFLES.out.sniffles_ch )
+
     emit : 
-        sniffles = SNIFFLES.out.sniffles_ch
+        sniffles = INDEX_SNIFFLES_VCF.out.sniffles_ch
 
 }
 
@@ -178,7 +197,7 @@ workflow spectre {
         SPECTRE( data )
     
     emit : 
-        spectre = SPECTRE.out.spectre_ch
+        spectre = SPECTRE.out.spectre_cnv_ch
 
 }
 
@@ -187,9 +206,10 @@ workflow straglr {
 
     take : 
         data 
+        genome
     
     main : 
-        STRAGLR( data )
+        STRAGLR( data, genome )
     
     emit : 
         straglr = STRAGLR.out.straglr_ch

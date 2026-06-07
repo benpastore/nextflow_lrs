@@ -3,7 +3,7 @@ process DIPCALL {
     label 'dipcall'
     tag "${sampleID}"
     
-    publishDir "${params.results}/dipcall/${sampleID}", mode: params.publish_mode
+    publishDir "${params.results}/variants/dipcall/${sampleID}", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(reads), val(hap1), val(hap2)
@@ -23,6 +23,9 @@ process DIPCALL {
     def prefix   = sampleID
     par_flag = params.par_opt ? params.par_opt : ""
     """
+
+    prefix=\$(basename \$reads .fastq.gz)
+
     # bgzip inputs if not already compressed (dipcall expects .gz)
     HAP1=${hap1}
     HAP2=${hap2}
@@ -40,17 +43,17 @@ process DIPCALL {
     # Generate the Makefile
     run-dipcall \\
         ${par_flag} \\
-        ${prefix} \\
+        \${prefix} \\
         ${ref} \\
         \${HAP1} \\
         \${HAP2} \\
-        > ${prefix}.mak
+        > \${prefix}.mak
 
     # Execute the pipeline
-    make -j ${task.cpus} -f ${prefix}.mak
+    make -j ${task.cpus} -f \${prefix}.mak
 
     # Tabix-index the output VCF if not already done
-    [ -f "${prefix}.dip.vcf.gz.tbi" ] || tabix -p vcf ${prefix}.dip.vcf.gz
+    [ -f "\${prefix}.dip.vcf.gz.tbi" ] || tabix -p vcf \${prefix}.dip.vcf.gz
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
