@@ -69,6 +69,7 @@ include { clair3 } from '../../subworkflows/ont.nf'
 include { whatshap_phase } from '../../subworkflows/ont.nf'
 include { whatshap_haplotag } from '../../subworkflows/ont.nf'
 include { longphase } from '../../subworkflows/ont.nf'
+include { longphase_sv } from '../../subworkflows/ont.nf'
 include { sniffles } from '../../subworkflows/ont.nf'
 include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
@@ -212,12 +213,11 @@ workflow {
 
 
         // spectre copy number variant caller 
-        spectre_input_ch = minimap2.out.bams
-            .combine( INDEX_REFERENCE.out.ref_indexed_ch )
-            .map { sampleID, bam, bai, ref_fa, ref_fai ->
-                tuple(sampleID, bam, bai, ref_fa, ref_fai)
-            }
-        spectre( spectre_input_ch )
+        //spectre_input_ch = minimap2.out.bams
+        //    .combine( INDEX_REFERENCE.out.ref_indexed_ch )
+        //    .map { sampleID, bam, bai, ref_fa, ref_fai ->
+        //        tuple(sampleID, bam, bai, ref_fa, ref_fai)
+        //    }
         
 
         /*
@@ -265,8 +265,21 @@ workflow {
         // sniffles (SV calling)
         sniffles( haplo_ch )
 
+        // combine sniffles + clair3 -> do another long phase and pass that to stragglr and spectre
+        clair3_sniffles_bam_ch = clair3.out.clair3_ch
+            .join(sniffles.out.sniffles_ch)
+            .join(minimap2.out.bams)
+            .map { sampleID, clair3_vcf, clair3_tbi, sniffles_vcf, sniffles_tbi, bam, bai ->
+                tuple(sampleID, clair3_vcf, clair3_tbi, sniffles_vcf, sniffles_tbi, bam, bai)
+            }
+        
+        longphase_sv( INDEX_REFERENCE.out.ref_indexed_ch, clair3_sniffles_bam_ch )
+
         // straggler (expansion repeats)
         straglr( haplo_ch, INDEX_REFERENCE.out.ref_indexed_ch )
+
+        // spectre CNV
+        spectre( haplo_ch, INDEX_REFERENCE.out.ref_indexed_ch )
 
     }
     /*
