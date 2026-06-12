@@ -44,20 +44,6 @@ workflow dorado {
 
 }
 
-include { MAP_READS_TO_ASSEMBLY } from '../modules/minimap2/main.nf'
-workflow map_reads_to_assembly {
-
-    take : 
-        data 
-    
-    main : 
-        MAP_READS_TO_ASSEMBLY( data )
-    
-    emit : 
-        assembly_alignment = MAP_READS_TO_ASSEMBLY.out.alignment
-
-}
-
 include { HAPDUP_PHASE } from '../modules/hapdup/main.nf'
 workflow hapdup_phase { 
 
@@ -105,6 +91,8 @@ workflow hapdiff {
 
 include { MINIMAP2_INDEX } from '../modules/minimap2/main.nf'
 include { MINIMAP2_ALIGN } from '../modules/minimap2/main.nf'
+
+/*
 workflow minimap2_index { 
 
     take : 
@@ -114,7 +102,7 @@ workflow minimap2_index {
     main : 
 
         genome_fasta = file("${data}")
-        genome_name = "${data.baseName}"
+        genome_name = "${genome_fasta.baseName}"
         index_dir = "${index_dir}/minimap2"
         index_path = "${index_dir}/minimap2/${genome_name}.mmi"
 
@@ -137,6 +125,23 @@ workflow minimap2_index {
         index = index
     
 }
+*/
+workflow minimap2_index {
+
+    take:
+        genome
+        index_dir
+
+    main:
+        genome_file = file(genome)
+
+        MINIMAP2_INDEX(genome_file, index_dir)
+
+        index_ch = MINIMAP2_INDEX.out.minimap_index
+
+    emit:
+        index = index_ch
+}
 
 workflow minimap2 {
 
@@ -152,7 +157,7 @@ workflow minimap2 {
         bams = MINIMAP2_ALIGN.out.bam_ch
 }
 
-include { MAP_ASM_TO_REF } from '../../modules/minimap2/main.nf'
+include { MAP_ASM_TO_REF } from '../modules/minimap2/main.nf'
 workflow minimap2_map_asm_to_ref {
 
     take : 
@@ -163,9 +168,8 @@ workflow minimap2_map_asm_to_ref {
         MAP_ASM_TO_REF( index, data )
     
     emit :
-        bams = MINIMAP2_ALIGN.out.bam_ch
+        bams = MAP_ASM_TO_REF.out.hap_bams
 }
-
 
 include { CLAIR3 } from '../modules/clair3/main.nf'
 workflow clair3 { 
@@ -200,7 +204,6 @@ workflow whatshap_haplotag {
         WHATSHAP_HAPLOTAG( ref, data )
     emit : 
         whatshap_haplotag = WHATSHAP_HAPLOTAG.out.whathap_haplotag_ch
-
 }
 
 include { LONGPHASE } from '../modules/longphase/main.nf'
@@ -212,9 +215,7 @@ workflow longphase {
     main : 
         LONGPHASE( ref, data )
     emit : 
-        longphase_ch = LONGPHASE.out.longphase_ch        
-
-
+        longphase_ch = LONGPHASE.out.longphase_ch
 }
 
 include { LONGPHASE_SV } from '../modules/longphase/main.nf'
@@ -228,9 +229,7 @@ workflow longphase_sv {
         LONGPHASE_SV( ref, data )
 
     emit : 
-        longphase_sv_ch = LONGPHASE_SV.out.longphase_sv_ch        
-
-
+        longphase_sv_ch = LONGPHASE_SV.out.longphase_sv_ch
 }
 
 include { SNIFFLES } from '../modules/sniffles/main.nf'
@@ -245,7 +244,6 @@ workflow sniffles {
 
     emit : 
         sniffles_ch = SNIFFLES.out.sniffles_ch
-
 }
 
 include { SPECTRE } from '../modules/spectre/main.nf'
@@ -260,7 +258,6 @@ workflow spectre {
     
     emit : 
         spectre = SPECTRE.out.spectre_cnv_ch
-
 }
 
 include { STRAGLR } from '../modules/straglr/main.nf'
@@ -275,7 +272,4 @@ workflow straglr {
     
     emit : 
         straglr = STRAGLR.out.straglr_ch
-
-
-
 }

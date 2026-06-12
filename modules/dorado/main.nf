@@ -16,7 +16,7 @@ process DORADO {
     
     export TF_FORCE_UNIFIED_MEMORY='1'
 
-    \$name=\$(basename ${reads} .fastq.gz)
+    name=\$(basename ${reads} .fastq.gz)
     # Align unmapped reads to a reference using dorado aligner, sort and index
     dorado aligner ${hapfasta} ${unal_bam} | samtools sort --threads ${task.cpus} > aligned_reads.bam
     samtools index aligned_reads.bam

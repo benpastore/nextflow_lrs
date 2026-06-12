@@ -1,14 +1,5 @@
 #!/usr/bin/env nextflow
 
-
-/*
-Discussion points for meeting
-
-- hifiasm vs verkko 
-- pepper, margin?
-- quality assesment of assembly
-/*
-
 /*
 ========================================================================================
                          long read sequencing pipeline
@@ -63,17 +54,15 @@ include { deepvariant } from '../../subworkflows/illumina.nf'
 include { hifasim } from '../../subworkflows/ont.nf'
 include { gfatools } from '../../subworkflows/ont.nf'
 include { dorado } from '../../subworkflows/ont.nf'
-include { hapdup_phase } from '../../subworkflows/ont.nf'
 
 include { minimap2 } from '../../subworkflows/ont.nf'
 include { minimap2_index } from '../../subworkflows/ont.nf'
 include { minimap2_map_asm_to_ref } from '../../subworkflows/ont.nf'
 
-include { clair3 } from '../../subworkflows/ont.nf'
-include { whatshap_phase } from '../../subworkflows/ont.nf'
-include { whatshap_haplotag } from '../../subworkflows/ont.nf'
 include { longphase } from '../../subworkflows/ont.nf'
 include { longphase_sv } from '../../subworkflows/ont.nf'
+
+include { clair3 } from '../../subworkflows/ont.nf'
 include { sniffles } from '../../subworkflows/ont.nf'
 include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
@@ -143,6 +132,9 @@ workflow {
     minimap2_index( params.genome, params.index )
     reference_index = minimap2_index.out.index // THIS GENERATES THE MINIMAP2 ALIGNMENT INDEX
 
+    INDEX_REFERENCE( params.genome ) // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
+    samtools_fai_index = INDEX_REFERENCE.out.ref_indexed_ch
+
     ////////////////// parse design
         parse_design( params.design )
         ont_reads = parse_design.out.ont
@@ -182,10 +174,9 @@ workflow {
 
     ////////////////// ASSEMBLY SECTION /////////////////////
     if (params.assemble_genome) { 
-        //1. Hifasim: assemble ont reads  
+        //Hifasim: assemble ont reads  
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
-        hifasim( ont_reads ) // check hifiasm version
-        hifasim.out.hifasim_asm.view()
+        hifasim( ont_reads )
 
         // Include an if else here to use verkko instead (may not need to use gfatools, depending on verkko output)
         // assembly QC & polishing with medaka
@@ -194,12 +185,13 @@ workflow {
         // minimira --> remove ligation based artifacts
         // use jasmine to combine variant calls from multiple callers
         // use busco to assess quality of assembly
-        //2. convert hifasim to fasta 
-        //if (params.debug) { println("CONVERT HIFASIM ASM TO FASTA") }
+
+        //convert hifasim to fasta 
         gfatools( hifasim.out.hifasim_asm )
 
         // include dorado polish
-        if (params.dorado) { 
+        if (params.dorado) {
+
             // dorado needs unaligned bam to work, so merge unaligned bam into gfatools.out
             dorado_input_ch = gfatools
                 .out
@@ -208,6 +200,7 @@ workflow {
                 .map { sampleID, reads, hapfasta, hapfai, unal_bam  ->
                     tuple( sampleID, reads, hapfasta, hapfai, unal_bam )
                  }
+            dorado_input_ch.view { x -> "DORADO INPUT: $x" }
 
             dorado( dorado_input_ch )
             genome_asm_ch = dorado.out.dorado_output_ch
@@ -215,17 +208,15 @@ workflow {
             genome_asm_ch = gfatools.out.haplotype_asm
         }
 
+        // map the asmbley to the reference
         minimap2_map_asm_to_ref( reference_index, genome_asm_ch)
 
-        //2. run dip call
+        //run dip call & hapdiff
         // index the reference genome quickly for dipcall 
-        INDEX_REFERENCE( params.genome ) // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
-        dipcall( genome_asm_ch,  INDEX_REFERENCE.out.ref_indexed_ch )
-        hapdiff( genome_asm_ch,  INDEX_REFERENCE.out.ref_indexed_ch )
+        dipcall( genome_asm_ch,  samtools_fai_index )
+        hapdiff( genome_asm_ch,  samtools_fai_index )
 
 
-    } else { 
-        INDEX_REFERENCE( params.genome )
     }
     ////////////////// VARIANT CALLING SECTION -- From alignment & haplotype phasing /////////////////////
     params.alignment_based_variant_calling = true
@@ -235,32 +226,7 @@ workflow {
         minimap2( reference_index, ont_reads )
 
         // clair3 call variants 
-        clair3( INDEX_REFERENCE.out.ref_indexed_ch, minimap2.out.bams )
-
-
-        // spectre copy number variant caller 
-        //spectre_input_ch = minimap2.out.bams
-        //    .combine( INDEX_REFERENCE.out.ref_indexed_ch )
-        //    .map { sampleID, bam, bai, ref_fa, ref_fai ->
-        //        tuple(sampleID, bam, bai, ref_fa, ref_fai)
-        //    }
-        /*
-        // mix the variant outputs
-        if ( params.use_illumina ) {
-            clair3_vcf_ch = clair3.out.clair3_ch
-                .map { sampleID, vcf, tbi ->
-                    tuple(sampleID, 'clair3', vcf, tbi)
-                }
-            deepvariant_vcf_ch = deepvariant.out.vcfs
-                .map { sampleID, vcf, tbi ->
-                    tuple(sampleID, 'deepvariant', vcf, tbi)
-                }
-
-            variants_ch = clair3_vcf_ch.mix(deepvariant_vcf_ch)
-        } else { 
-            variants_ch = clair3.out.clair3_ch
-        }
-        */
+        clair3( samtools_fai_index, minimap2.out.bams )
 
         variants_ch = clair3.out.clair3_ch
 
@@ -269,28 +235,9 @@ workflow {
             .map { sampleID, vcf, tbi, bam, bai ->
                 tuple(sampleID, vcf, tbi, bam, bai)
             }
-        
-        /*
-        if (params.phasing_tool == "whatshap") { 
-            // whats haplotype phase on clair3, in future can also run dv -> merge with clair3 -> run haplotype phasing
-            // can also run something called longphase ( use long phase )
-            whatshap_phase( INDEX_REFERENCE.out.ref_indexed_ch, vcf_bam_ch )
-
-            // whatshap happlotag
-            whatshap_haplotag( INDEX_REFERENCE.out.ref_indexed_ch, whatshap_phase.out.whatshap_phase_ch )
-
-            haplo_ch = whatshap_haplotag.out.whatshap_haplotag
-        } else { 
-            
-            longphase( INDEX_REFERENCE.out.ref_indexed_ch, vcf_bam_ch )
-
-            haplo_ch = longphase.out.longphase_ch
-
-        }
-        */
 
         // phase using variants from clair3
-        longphase( INDEX_REFERENCE.out.ref_indexed_ch, vcf_bam_ch )
+        longphase( samtools_fai_index, vcf_bam_ch )
         haplo_ch = longphase.out.longphase_ch
 
         // sniffles (SV calling)
@@ -305,15 +252,15 @@ workflow {
                 tuple(sampleID, clair3_vcf, clair3_tbi, sniffles_vcf, sniffles_tbi, bam, bai)
             }
         
-        longphase_sv( INDEX_REFERENCE.out.ref_indexed_ch, clair3_sniffles_bam_ch )
-        
+        // longphase round2
+        longphase_sv( samtools_fai_index, clair3_sniffles_bam_ch )
         haplo_ch_v2 = longphase_sv.out.longphase_sv_ch
 
         // straggler (expansion repeats)
-        straglr( haplo_ch_v2, INDEX_REFERENCE.out.ref_indexed_ch )
+        straglr( haplo_ch_v2, samtools_fai_index )
 
         // spectre CNV
-        spectre( haplo_ch_v2, INDEX_REFERENCE.out.ref_indexed_ch )
+        spectre( haplo_ch_v2, samtools_fai_index )
 
     }
 

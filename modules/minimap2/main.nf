@@ -1,3 +1,4 @@
+/*
 process MINIMAP2_INDEX { 
 
     label 'minimap2'
@@ -29,6 +30,32 @@ process MINIMAP2_INDEX {
 
     """
 }
+*/
+
+process MINIMAP2_INDEX { 
+    label 'minimap2'
+    publishDir "${index_dir}", mode: 'copy'
+
+    input: 
+        path genome
+        val index_dir
+
+    output: 
+        path("*.mmi"), emit: minimap_index
+
+    script: 
+    """
+    set -euo pipefail
+
+    idx="${index_dir}/${genome.simpleName}.mmi"
+
+    if [[ -s "\$idx" ]]; then
+        ln -s "\$idx" ${genome.simpleName}.mmi
+    else
+        minimap2 -d ${genome.simpleName}.mmi ${genome}
+    fi
+    """
+}
 
 process MINIMAP2_ALIGN { 
 
@@ -37,11 +64,11 @@ process MINIMAP2_ALIGN {
     publishDir "${params.results}/minimap2", mode : 'copy'
 
     input : 
-        val index 
+        path index 
         tuple val(sampleID), val(fastq) 
     
     output : 
-        tuple val(sampleID), path("*.10pct.bam"), path("*.10pct.bam.bai"), emit : bam_ch
+        tuple val(sampleID), path("*.sorted.bam"), path("*.sorted.bam.bai"), emit : bam_ch
 
     script : 
     """
@@ -73,11 +100,12 @@ process MINIMAP2_ALIGN {
 process MAP_ASM_TO_REF { 
 
     tag "$sampleID"
+    label 'minimap2'
 
     publishDir "${params.results}/minimap2_map_asm_to_ref", mode : 'copy'
 
     input:
-        val ref_mmi 
+        path ref_mmi 
         tuple val(sampleID), val(reads), val(hap1_fa), val(hap2_fa)
     
 
@@ -103,48 +131,5 @@ process MAP_ASM_TO_REF {
       | samtools sort -@ ${task.cpus} -o ${sampleID}.hap2.ref.bam
 
     samtools index -@ ${task.cpus} ${sampleID}.hap2.ref.bam
-    """
-}
-
-process MAP_READS_TO_ASSEMBLY {
-
-    tag "${params.sample_id}"
-    label 'minimap2'
-    publishDir "${params.results}/assembly/read_to_assembly", mode: params.publish_mode
-
-    input:
-        tuple val(sampleID), val(fastq), val(asm_fa), val(asm_fai)
-
-    output:
-        tuple val(sampleID), path(asm_fa), path(asm_fai), path("*.bam"), path("*.bai"), emit : alignment
-
-    script:
-    """
-    minimap2 -t ${task.cpus} \
-        -ax map-ont ${asm} \
-        ${reads} | samtools sort -@ ${task.cpus} -o ${sampleID}_align_reads_to_assembly.sorted.bam
-
-    samtools index ${sampleID}_align_reads_to_assembly.sorted.bam
-    """
-}
-
-process ALIGN_HAPLOTYPES_TO_REFERENCE {
-    
-    tag "${sampleID}"
-    publishDir "${params.results}/assembly/haplotype_alignments", mode: params.publish_mode
-
-    input:
-        val(ref)
-        tuple val(sampleID), val(hap1), val(hap2)
-
-    output:
-        tuple val(sampleID), path("*hap1*"), path("*hap2*"), emit : aligned_haplotypes
-    path "*hap1_to_ref.paf"
-    path "*hap2_to_ref.paf"
-
-    script:
-    """
-    minimap2 -t ${task.cpus} -x asm5 ${ref} ${hap1} > ${sampleID}_hap1_to_ref.paf
-    minimap2 -t ${task.cpus} -x asm5 ${ref} ${hap2} > ${sampleID}_hap2_to_ref.paf
     """
 }

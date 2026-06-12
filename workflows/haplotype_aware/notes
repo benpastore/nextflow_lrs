@@ -1,0 +1,6 @@
+define splicing index mut1 (wt pheno) vs. mut2 (SMA pheno)
+
+compare splice sites 
+
+look at ones that change with noise reduction (conf interval / machine learning)
+
