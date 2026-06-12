@@ -23,9 +23,7 @@ process MINIMAP2_INDEX {
     genome_name=\${genome_name%.fna}
     cp ${genome} \${genome_name}
 
-    singularity run \\
-        docker://staphb/minimap2:latest \\
-        minimap2 \\
+    minimap2 \\
         -d \${genome_name}.mmi \\
         \${genome_name}
 
@@ -51,9 +49,7 @@ process MINIMAP2_ALIGN {
         
     name=\$(basename ${fastq} .fastq.gz)
 
-    singularity run \\
-        docker://staphb/minimap2:latest \\
-        minimap2 \\
+    minimap2 \\
         -t ${task.cpus} \\
         -x map-ont \\
         -a \\
@@ -62,24 +58,52 @@ process MINIMAP2_ALIGN {
         ${index} \\
         ${fastq} > alignment.sam
 
-    singularity run \\
-        docker://biocontainers/samtools:v1.9-4-deb_cv1 \\
-        samtools sort -@ ${task.cpus} -o \${name}.minimap2.sorted.bam alignment.sam
+    samtools sort -@ ${task.cpus} -o \${name}.minimap2.sorted.bam alignment.sam
 
-    singularity run \\
-        docker://biocontainers/samtools:v1.9-4-deb_cv1 \\
-        samtools index -@ ${task.cpus} \${name}.minimap2.sorted.bam
+    samtools index -@ ${task.cpus} \${name}.minimap2.sorted.bam
 
-    singularity run \\
-        docker://biocontainers/samtools:v1.9-4-deb_cv1 \\
-        samtools view -@ ${task.cpus} -s 42.10 -b \${name}.minimap2.sorted.bam > \${name}.minimap2.sorted.10pct.bam
+    samtools view -@ ${task.cpus} -s 42.10 -b \${name}.minimap2.sorted.bam > \${name}.minimap2.sorted.10pct.bam
     
-    singularity run \\
-        docker://biocontainers/samtools:v1.9-4-deb_cv1 \\
-        samtools index -@ ${task.cpus} \${name}.minimap2.sorted.10pct.bam
+    samtools index -@ ${task.cpus} \${name}.minimap2.sorted.10pct.bam
 
     """
 
+}
+
+process MAP_ASM_TO_REF { 
+
+    tag "$sampleID"
+
+    publishDir "${params.results}/minimap2_map_asm_to_ref", mode : 'copy'
+
+    input:
+        val ref_mmi 
+        tuple val(sampleID), val(reads), val(hap1_fa), val(hap2_fa)
+    
+
+    output:
+    tuple val(sampleID),
+          path("${sampleID}.hap1.ref.bam"),
+          path("${sampleID}.hap1.ref.bam.bai"),
+          path("${sampleID}.hap2.ref.bam"),
+          path("${sampleID}.hap2.ref.bam.bai"),
+          emit: hap_bams
+
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    minimap2 -ax asm20 -t ${task.cpus} ${ref_mmi} ${hap1_fa} \
+      | samtools sort -@ ${task.cpus} -o ${sampleID}.hap1.ref.bam
+
+    samtools index -@ ${task.cpus} ${sampleID}.hap1.ref.bam
+
+    minimap2 -ax asm20 -t ${task.cpus} ${ref_mmi} ${hap2_fa} \
+      | samtools sort -@ ${task.cpus} -o ${sampleID}.hap2.ref.bam
+
+    samtools index -@ ${task.cpus} ${sampleID}.hap2.ref.bam
+    """
 }
 
 process MAP_READS_TO_ASSEMBLY {

@@ -1,6 +1,9 @@
 process GFA_CONVERT { 
     label 'gfatools'
 
+
+    publishDir "${params.results}/gfatools", mode: params.publish_mode
+
     input: 
         tuple val(sampleID), val(reads), path(hap1), path(hap2)
 

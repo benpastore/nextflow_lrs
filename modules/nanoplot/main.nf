@@ -2,7 +2,7 @@
 
 process NANOPLOT_RAW {
 
-    label 'qc'
+    label 'nanoplot'
 
     tag "${sampleID}_nanoplot_raw"
 
@@ -20,9 +20,7 @@ process NANOPLOT_RAW {
 
     name=\$(basename ${fastq} .fastq.gz)
 
-    singularity run \\
-        docker://staphb/nanoplot:latest \\
-        NanoPlot \\
+    NanoPlot \\
         -t ${task.cpus} \\
         -o \${PWD}/\${name} \\
         --fastq ${fastq} \\

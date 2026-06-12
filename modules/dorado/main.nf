@@ -2,8 +2,10 @@ process DORADO {
 
     label 'dorado'
 
+    publishDir "${params.results}/dorado", mode: params.publish_mode
+
     input : 
-        tuple val(sampleID), val(reads), val(hapfasta), val(hapfai)
+        tuple val(sampleID), val(reads), val(hapfasta), val(hapfai), val(unal_bam)
     
     output : 
         tuple val(sampleID), val(reads), path("*hap1.doradopolish.fa"), path("*hap2.doradopolish.fa"), emit : dorado_output_ch
@@ -15,9 +17,11 @@ process DORADO {
     export TF_FORCE_UNIFIED_MEMORY='1'
 
     \$name=\$(basename ${reads} .fastq.gz)
-    dorado aligner ${hapfasta} ${reads} | samtools sort --threads ${task.cpus} > aligned_reads.bam
+    # Align unmapped reads to a reference using dorado aligner, sort and index
+    dorado aligner ${hapfasta} ${unal_bam} | samtools sort --threads ${task.cpus} > aligned_reads.bam
     samtools index aligned_reads.bam
 
+    # Call consensus
     dorado polish aligned_reads.bam ${hapfasta} > polished_assembly.fasta
 
     awk '/^>hap1_/ {p=1} /^>hap2_/ {p=0} p' polished_assembly.fasta > \${name}.hap1.doradopolish.fa

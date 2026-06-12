@@ -18,9 +18,7 @@ process CLAIR3 {
     name=\$(basename ${bam} .bam)
 
     MODEL_NAME="r941_prom_sup_g5014"
-    singularity run --nv --cleanenv --env TMPDIR=/tmp \\
-    docker://hkubal/clair3:v2.0.1_gpu \\
-        /opt/bin/run_clair3.sh \\
+    /opt/bin/run_clair3.sh \\
         --bam_fn=${bam} \\
         --ref_fn=${ref} \\
         --threads=${task.cpus} \\
@@ -33,6 +31,8 @@ process CLAIR3 {
     mv merge_output.vcf.gz \$name.clair3.vcf.gz
     mv merge_output.vcf.gz.tbi \$name.clair3.vcf.gz.tbi
 
+    #singularity run --nv --cleanenv --env TMPDIR=/tmp \\
+    #docker://hkubal/clair3:v2.0.1_gpu \\
     #mkdir -p clair3
     #model="r1041_e82_400bps_hac_v520_with_mv"
     #run_clair3.sh \

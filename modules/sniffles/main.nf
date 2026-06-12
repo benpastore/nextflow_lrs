@@ -9,7 +9,7 @@ process SNIFFLES {
         tuple val(sampleID), val(bam), val(bai)
 
     output:
-        tuple val(sampleID), path("*.sniffles.vcf"), emit : sniffles_ch
+        tuple val(sampleID), path("*.sniffles.vcf.gz"), path("*.sniffles.vcf.gz.tbi"), emit : sniffles_ch
 
     script:
     """
@@ -22,6 +22,10 @@ process SNIFFLES {
       --vcf \$name.sniffles.vcf \
       --threads ${task.cpus} \
       --allow-overwrite
+    
+    bgzip -f \$name.sniffles.vcf
+    tabix -f -p vcf \$name.sniffles.vcf.gz
+    
     """
 }
 
@@ -34,14 +38,20 @@ process INDEX_SNIFFLES_VCF {
 
     output:
         tuple val(sampleID),
-            path("${sampleID}.sniffles.vcf.gz"),
-            path("${sampleID}.sniffles.vcf.gz.tbi"), emit : sniffles_ch
+            path("*.sniffles.vcf.gz"),
+            path("*.sniffles.vcf.gz.tbi"), emit : sniffles_ch
 
     script:
     """
     #!/bin/bash
 
-    bgzip -f ${vcf}
-    tabix -f -p vcf ${vcf}.sniffles.vcf.gz
+    set -euo pipefail
+
+    if [[ "${vcf}" == *.vcf.gz ]]; then
+        tabix -f -p vcf ${vcf}
+    else
+        bgzip -f ${vcf}
+        tabix -f -p vcf ${vcf}.gz
+    fi
     """
 }

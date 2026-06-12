@@ -26,9 +26,7 @@ process DEEPVARIANT_CALL_VARIANTS {
 
     export TF_FORCE_UNIFIED_MEMORY='1'
 
-    singularity run \\
-        docker://google/deepvariant:latest \\
-        /opt/deepvariant/bin/run_deepvariant \\
+    /opt/deepvariant/bin/run_deepvariant \\
         --model_type="WGS" \\
         --ref=${genome} \\
         --reads=${bam} \\
@@ -41,7 +39,6 @@ process DEEPVARIANT_CALL_VARIANTS {
 
     bgzip -@ 8 *vcf
     tabix -p vcf *.vcf.gz
-        
     """   
 }
 

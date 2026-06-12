@@ -88,18 +88,35 @@ workflow dipcall {
 
 }
 
+include { HAPDIFF } from '../modules/hapdiff/main.nf'
+workflow hapdiff { 
+
+    take : 
+        data 
+        genome
+    
+    main : 
+        HAPDIFF( data, genome )
+    
+    emit : 
+        hapdiff_ch = HAPDIFF.out.hapdiff_ch
+
+}
+
 include { MINIMAP2_INDEX } from '../modules/minimap2/main.nf'
 include { MINIMAP2_ALIGN } from '../modules/minimap2/main.nf'
-workflow minimap2 {
+workflow minimap2_index { 
 
     take : 
         data
+        index_dir
+    
+    main : 
 
-    main :
-        genome_fasta = file("${params.genome}")
-        genome_name = "${genome_fasta.baseName}"
-        index_dir = "${params.index}/minimap2"
-        index_path = "${params.index}/minimap2/${genome_name}.mmi"
+        genome_fasta = file("${data}")
+        genome_name = "${data.baseName}"
+        index_dir = "${index_dir}/minimap2"
+        index_path = "${index_dir}/minimap2/${genome_name}.mmi"
 
         index_exists = file(index_path).exists()
 
@@ -110,17 +127,45 @@ workflow minimap2 {
         }
 
         if (build == true){
-            MINIMAP2_INDEX( params.genome, index_dir, index_path )
+            MINIMAP2_INDEX( data, index_dir, index_path )
             index = MINIMAP2_INDEX.out.index_ch
         } else {
             index = index_path 
         }
+    
+    emit : 
+        index = index
+    
+}
+
+workflow minimap2 {
+
+    take : 
+        index
+        data
+
+    main :
 
         MINIMAP2_ALIGN( index, data )
     
     emit :
         bams = MINIMAP2_ALIGN.out.bam_ch
 }
+
+include { MAP_ASM_TO_REF } from '../../modules/minimap2/main.nf'
+workflow minimap2_map_asm_to_ref {
+
+    take : 
+        index 
+        data
+        
+    main :
+        MAP_ASM_TO_REF( index, data )
+    
+    emit :
+        bams = MINIMAP2_ALIGN.out.bam_ch
+}
+
 
 include { CLAIR3 } from '../modules/clair3/main.nf'
 workflow clair3 { 
@@ -172,18 +217,34 @@ workflow longphase {
 
 }
 
+include { LONGPHASE_SV } from '../modules/longphase/main.nf'
+workflow longphase_sv { 
+
+    take : 
+        ref
+        data
+
+    main : 
+        LONGPHASE_SV( ref, data )
+
+    emit : 
+        longphase_sv_ch = LONGPHASE_SV.out.longphase_sv_ch        
+
+
+}
+
 include { SNIFFLES } from '../modules/sniffles/main.nf'
 include { INDEX_SNIFFLES_VCF } from '../modules/sniffles/main.nf'
 workflow sniffles { 
 
     take : 
-        data 
+        data
+        
     main : 
         SNIFFLES( data )
-        INDEX_SNIFFLES_VCF( SNIFFLES.out.sniffles_ch )
 
     emit : 
-        sniffles = INDEX_SNIFFLES_VCF.out.sniffles_ch
+        sniffles_ch = SNIFFLES.out.sniffles_ch
 
 }
 
@@ -192,9 +253,10 @@ workflow spectre {
 
     take : 
         data 
+        genome
     
     main : 
-        SPECTRE( data )
+        SPECTRE( data, genome )
     
     emit : 
         spectre = SPECTRE.out.spectre_cnv_ch

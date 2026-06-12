@@ -1,2 +1,2 @@
-SAMPLE	ONT	R1_ILLUMINA	R2_ILLUMINA
-sample48	/fs/ess/PAS0631/AA_BEN_ONT/nanopore_sample_48.fastq.gz		
+SAMPLE	ONT	ONT_UNAL_BAM	R1_ILLUMINA	R2_ILLUMINA
+sample48	/fs/ess/PAS0631/AA_BEN_ONT/nanopore_sample_48.fastq.gz			

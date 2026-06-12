@@ -16,15 +16,10 @@ process HIFASIM {
     #!/bin/bash
     
     name=\$(basename ${reads} .fastq.gz)
-    singularity run \\
-        docker://benpasto/hifiasm:latest \\
+    hifiasm \\
         -t64 \\
         --ont \\
         -o \$name \\
         ${reads}
-
-    #hifiasm -t64 -o \$name.asm ${reads}
-    #hap1.p_ctg.gfa
-
     """
 }

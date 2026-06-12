@@ -49,6 +49,8 @@ nextflow.enable.dsl=2
 
 /* include modules */
 include { DESIGN_INPUT } from '../../modules/parse_design/main.nf'
+include { NANOPLOT_RAW } from '../../modules/nanoplot/main.nf'
+include { INDEX_REFERENCE } from '../../modules/samtools/main.nf'
 
 /* include workflows */
 ///////////// ILLUMINA ////////////
@@ -61,10 +63,12 @@ include { deepvariant } from '../../subworkflows/illumina.nf'
 include { hifasim } from '../../subworkflows/ont.nf'
 include { gfatools } from '../../subworkflows/ont.nf'
 include { dorado } from '../../subworkflows/ont.nf'
-include { map_reads_to_assembly } from '../../subworkflows/ont.nf'
 include { hapdup_phase } from '../../subworkflows/ont.nf'
-include { INDEX_REFERENCE } from '../../modules/samtools/main.nf'
+
 include { minimap2 } from '../../subworkflows/ont.nf'
+include { minimap2_index } from '../../subworkflows/ont.nf'
+include { minimap2_map_asm_to_ref } from '../../subworkflows/ont.nf'
+
 include { clair3 } from '../../subworkflows/ont.nf'
 include { whatshap_phase } from '../../subworkflows/ont.nf'
 include { whatshap_haplotag } from '../../subworkflows/ont.nf'
@@ -74,7 +78,7 @@ include { sniffles } from '../../subworkflows/ont.nf'
 include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
 include { dipcall } from '../../subworkflows/ont.nf'
-include { NANOPLOT_RAW } from '../../modules/nanoplot/main.nf'
+include { hapdiff } from '../../subworkflows/ont.nf'
 
 workflow parse_design {
     take : 
@@ -86,19 +90,25 @@ workflow parse_design {
         ont = DESIGN_INPUT
             .out
             .fastq_ch
-            .splitCsv( header: ['sample', 'ont', 'r1', 'r2'], sep: ",", skip: 1)
+            .splitCsv( header: ['sample', 'ont', 'unal_bam', 'r1', 'r2'], sep: ",", skip: 1)
             .map{ row -> [ row.sample, row.ont ] }
+        
+        ont_unal_bam = DESIGN_INPUT
+            .out
+            .fastq_ch
+            .splitCsv( header: ['sample', 'ont', 'unal_bam', 'r1', 'r2'], sep: ",", skip: 1)
+            .map{ row -> [ row.sample, row.unal_bam ] }
 
         ont_illumina = DESIGN_INPUT
             .out
             .fastq_ch
-            .splitCsv( header: ['sample', 'ont', 'r1', 'r2'], sep: ",", skip: 1)
+            .splitCsv( header: ['sample', 'ont', 'unal_bam', 'r1', 'r2'], sep: ",", skip: 1)
             .map{ row -> [ row.sample, row.ont, row.r1, row.r2 ] }
 
         illumina = DESIGN_INPUT
             .out
             .fastq_ch
-            .splitCsv( header: ['sample', 'ont', 'r1', 'r2'], sep: ",", skip: 1)
+            .splitCsv( header: ['sample', 'ont', 'unal_bam', 'r1', 'r2'], sep: ",", skip: 1)
             .map{ row -> [ row.sample, row.r1, row.r2 ] }
 
         //replicates_ch = DESIGN_INPUT
@@ -110,6 +120,7 @@ workflow parse_design {
         ont = ont
         ont_illumina = ont_illumina
         illumina = illumina
+        ont_unal_bam = ont_unal_bam
         //replicates = replicates_ch
 }
 
@@ -128,10 +139,14 @@ workflow {
     if (params.genome)    { ch_genome = file(params.genome, checkIfExists: true) } else { exit 1, 'Genome fasta not specified!' }
     if (params.outprefix) { ; } else {'Outprefix not specified! Defaulting to ONT_ANALYSIS'; params.outprefix = 'ONT_ANALYSIS' }
 
-    ////////////////// parse design
+    // upstream of everything make sure minimap2 index is built for reference 
+    minimap2_index( params.genome, params.index )
+    reference_index = minimap2_index.out.index // THIS GENERATES THE MINIMAP2 ALIGNMENT INDEX
 
+    ////////////////// parse design
         parse_design( params.design )
         ont_reads = parse_design.out.ont
+        ont_unal_bam = parse_design.out.ont_unal_bam
         ont_illumina = parse_design.out.ont_illumina
         illumina_reads = parse_design.out.illumina
         
@@ -166,7 +181,6 @@ workflow {
         NANOPLOT_RAW( ont_reads )
 
     ////////////////// ASSEMBLY SECTION /////////////////////
-    params.assemble_genome = false
     if (params.assemble_genome) { 
         //1. Hifasim: assemble ont reads  
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
@@ -177,36 +191,48 @@ workflow {
         // assembly QC & polishing with medaka
         // # contigs, % completeness, contig size 
         // go directly into dipcall from hifiasm 
-
         // minimira --> remove ligation based artifacts
         // use jasmine to combine variant calls from multiple callers
         // use busco to assess quality of assembly
-
         //2. convert hifasim to fasta 
         //if (params.debug) { println("CONVERT HIFASIM ASM TO FASTA") }
         gfatools( hifasim.out.hifasim_asm )
 
         // include dorado polish
         if (params.dorado) { 
-            dorado( gfatools.out.fasta_asm )
+            // dorado needs unaligned bam to work, so merge unaligned bam into gfatools.out
+            dorado_input_ch = gfatools
+                .out
+                .fasta_asm
+                .join(ont_unal_bam)
+                .map { sampleID, reads, hapfasta, hapfai, unal_bam  ->
+                    tuple( sampleID, reads, hapfasta, hapfai, unal_bam )
+                 }
+
+            dorado( dorado_input_ch )
             genome_asm_ch = dorado.out.dorado_output_ch
         } else { 
             genome_asm_ch = gfatools.out.haplotype_asm
         }
 
+        minimap2_map_asm_to_ref( reference_index, genome_asm_ch)
+
         //2. run dip call
         // index the reference genome quickly for dipcall 
-        INDEX_REFERENCE( params.genome )
+        INDEX_REFERENCE( params.genome ) // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
         dipcall( genome_asm_ch,  INDEX_REFERENCE.out.ref_indexed_ch )
-        dipcall.out.dipcall.view()
+        hapdiff( genome_asm_ch,  INDEX_REFERENCE.out.ref_indexed_ch )
+
+
     } else { 
         INDEX_REFERENCE( params.genome )
     }
     ////////////////// VARIANT CALLING SECTION -- From alignment & haplotype phasing /////////////////////
     params.alignment_based_variant_calling = true
     if (params.alignment_based_variant_calling) { 
+
         // MAP READS TO REFERENCE GENOME
-        minimap2( ont_reads )
+        minimap2( reference_index, ont_reads )
 
         // clair3 call variants 
         clair3( INDEX_REFERENCE.out.ref_indexed_ch, minimap2.out.bams )
@@ -218,8 +244,6 @@ workflow {
         //    .map { sampleID, bam, bai, ref_fa, ref_fai ->
         //        tuple(sampleID, bam, bai, ref_fa, ref_fai)
         //    }
-        
-
         /*
         // mix the variant outputs
         if ( params.use_illumina ) {
@@ -246,6 +270,7 @@ workflow {
                 tuple(sampleID, vcf, tbi, bam, bai)
             }
         
+        /*
         if (params.phasing_tool == "whatshap") { 
             // whats haplotype phase on clair3, in future can also run dv -> merge with clair3 -> run haplotype phasing
             // can also run something called longphase ( use long phase )
@@ -262,9 +287,16 @@ workflow {
             haplo_ch = longphase.out.longphase_ch
 
         }
+        */
+
+        // phase using variants from clair3
+        longphase( INDEX_REFERENCE.out.ref_indexed_ch, vcf_bam_ch )
+        haplo_ch = longphase.out.longphase_ch
+
         // sniffles (SV calling)
         sniffles( haplo_ch )
 
+        // re-phase with long phase including sv
         // combine sniffles + clair3 -> do another long phase and pass that to stragglr and spectre
         clair3_sniffles_bam_ch = clair3.out.clair3_ch
             .join(sniffles.out.sniffles_ch)
@@ -274,17 +306,15 @@ workflow {
             }
         
         longphase_sv( INDEX_REFERENCE.out.ref_indexed_ch, clair3_sniffles_bam_ch )
+        
+        haplo_ch_v2 = longphase_sv.out.longphase_sv_ch
 
         // straggler (expansion repeats)
-        straglr( haplo_ch, INDEX_REFERENCE.out.ref_indexed_ch )
+        straglr( haplo_ch_v2, INDEX_REFERENCE.out.ref_indexed_ch )
 
         // spectre CNV
-        spectre( haplo_ch, INDEX_REFERENCE.out.ref_indexed_ch )
+        spectre( haplo_ch_v2, INDEX_REFERENCE.out.ref_indexed_ch )
 
     }
-    /*
-    - https://github.com/epi2me-labs/wf-human-variation
-     - longphase (could be used instead of whathap)
-     - hapdiff (think this does variant calling from the de novo assembled genomes)
-     */
+
 }

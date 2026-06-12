@@ -19,8 +19,6 @@ process LONGQC_RAW {
     name=\$(basename ${fastq} .fastq.gz)
 
     zcat ${fastq} | \\
-    singularity run \\
-        docker://cymbopogon/longqc:latest \\
         sampleqc \\
         -x ont-ligation \\
         -p ${task.cpus} \\
