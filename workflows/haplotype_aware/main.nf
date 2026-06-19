@@ -69,6 +69,11 @@ include { straglr } from '../../subworkflows/ont.nf'
 include { dipcall } from '../../subworkflows/ont.nf'
 include { hapdiff } from '../../subworkflows/ont.nf'
 
+// to add 
+// include { porechop_abi } from '../../subworkflows/ont.nf'
+// include { dorado_trim } from '../../subworkflows/ont.nf'
+
+
 workflow parse_design {
     take : 
         data
@@ -129,11 +134,11 @@ workflow {
     if (params.outprefix) { ; } else {'Outprefix not specified! Defaulting to ONT_ANALYSIS'; params.outprefix = 'ONT_ANALYSIS' }
 
     // upstream of everything make sure minimap2 index is built for reference 
-    minimap2_index( params.genome, params.index )
+    minimap2_index( params.genome, params.index ) // THIS GENERATES THE MINIMAP2 ALIGNMENT INDEX
     reference_index = minimap2_index.out.index // THIS GENERATES THE MINIMAP2 ALIGNMENT INDEX
 
     INDEX_REFERENCE( params.genome ) // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
-    samtools_fai_index = INDEX_REFERENCE.out.ref_indexed_ch
+    samtools_fai_index = INDEX_REFERENCE.out.ref_indexed_ch // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
 
     ////////////////// parse design
         parse_design( params.design )
@@ -147,8 +152,25 @@ workflow {
             ont_reads.view() 
         }
 
-    /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
+    // trimming upstream of assembly and alignment
+    if ( params.dorado_trim ) { 
+        println("Dorado trim sequencing kit set to ${params.default_dorado_seq_kit}")
 
+        // Here we are going to : 
+        // 1. run dorado trim on unal bam (save output to ont_unal_bam)
+        // 2. use samtools to generate a new fastq (tmp.fastq)
+        // 3. run porechop_abi on the fastq (save to ont_reads )
+
+    } else { 
+
+        // Here we are going to : 
+        // 1. run porechop abi on fastq (save to ont_reads)
+        // 2. use samtools to generate a new bam (ont_unal_bam)
+
+    }
+
+
+    /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
         if (params.use_illumina) {
 
             if (params.debug) { println("RUNNING ILLUMINA PIPELINE") }

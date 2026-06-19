@@ -39,7 +39,7 @@ echo """#!/bin/bash
 
 #SBATCH --no-requeue
 #SBATCH -c 1
-#SBATCH --account=PCON0160 --ntasks-per-node=1 --time=08:00:00 --mem=16gb --cluster=ascend --partition=nextgen
+#SBATCH --account=PCON0160 --ntasks-per-node=1 --time=24:00:00 --mem=16gb --cluster=ascend --partition=nextgen
 
 nextflow $SCRIPT_DIR/main.nf $@
 
