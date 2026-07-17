@@ -20,3 +20,18 @@ z_old/
 genomes/
 .nextflow/
 .nextflow.log*
+singularity/*
+# Singularity images and temporary downloads
+**/singularity/
+*.img
+*.img.pulling.*
+
+# Downloaded model weights
+models/
+
+# Jupyter temporary files
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Temporary/debug files
+*_debug.txt
