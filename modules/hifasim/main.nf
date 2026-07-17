@@ -5,10 +5,10 @@ process HIFASIM {
     publishDir "${params.results}/hifasim", mode: params.publish_mode
 
     input :
-        tuple val(sampleID), val(reads) 
+        tuple val(sampleID), val(bam), val(reads) 
 
     output : 
-        tuple val(sampleID), val(reads), path("*hap1.p_ctg.gfa"), path("*hap2.p_ctg.gfa"), emit : hifasim_asm
+        tuple val(sampleID), val(bam), val(reads), path("*hap1.p_ctg.gfa"), path("*hap2.p_ctg.gfa"), emit : hifasim_asm
         path("*")
 
     script : 

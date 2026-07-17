@@ -127,3 +127,52 @@ process INDEX_FLYE_ASSEMBLY {
 }
 
 
+process SAMTOOLS_CONVERT_BAM_TO_FASTQ {
+
+    tag "convert_bam2fastq"
+    label 'samtools'
+
+    publishDir "${params.results}/samtools", mode: params.publish_mode
+
+    input:
+        tuple val(sampleID), val(unal_bam)
+
+    output:
+        tuple val(sampleID), val(unal_bam), path("*.fastq.gz"), emit : samtool_convert_unalbam2fastq
+
+    script:
+    """
+    #!/bin/bash
+    
+    name=\$(basename ${unal_bam} .bam)
+    samtools fastq ${unal_bam} | gzip > \$name.fastq.gz
+
+    """
+}
+
+process MERGE_INPUTS {
+
+    tag "merge_inputs"
+    label 'samtools'
+
+    input:
+    tuple val(sample),
+          path(fastqs),
+          path(bams)
+
+    output:
+    tuple val(sample),
+          path("${sample}.fastq.gz"),
+          path("${sample}.bam"), emit : merged_inputs_ch
+
+    script:
+    """
+    # Merge FASTQs
+    cat ${fastqs.join(' ')} > ${sample}.fastq.gz
+
+    # Merge BAMs
+    samtools merge -o ${sample}.bam ${bams.join(' ')}
+
+    samtools index ${sample}.bam
+    """
+}

@@ -70,9 +70,10 @@ include { dipcall } from '../../subworkflows/ont.nf'
 include { hapdiff } from '../../subworkflows/ont.nf'
 
 // to add 
-// include { porechop_abi } from '../../subworkflows/ont.nf'
-// include { dorado_trim } from '../../subworkflows/ont.nf'
-
+include { DORADO_TRIM } from '../../modules/dorado/main.nf'
+include { SAMTOOLS_CONVERT_BAM_TO_FASTQ } from '../../modules/samtools/main.nf'
+include { PORECHOP } from '../../modules/porechop/main.nf'
+include { MERGE_INPUTS } from '../../modules/samtools/main.nf'
 
 workflow parse_design {
     take : 
@@ -81,6 +82,20 @@ workflow parse_design {
     main : 
         DESIGN_INPUT( data )
 
+        ont = DESIGN_INPUT
+            .out
+            .fastq_ch
+            .splitCsv( header: ['sample', 'ont', 'unal_bam'], sep: ",", skip: 1)
+            .map{ row -> [ row.sample, file(row.ont), file(row.unal_bam) ] }
+            .groupTuple()
+        
+        ont.view()
+
+        MERGE_INPUTS( ont )
+        
+        ont_ch = MERGE_INPUTS.out.merged_inputs_ch
+
+        /*
         ont = DESIGN_INPUT
             .out
             .fastq_ch
@@ -109,12 +124,13 @@ workflow parse_design {
         //    .out
         //    .condition_ch
         //    .splitCsv(header:false, skip:1)
+        */
         
     emit : 
-        ont = ont
-        ont_illumina = ont_illumina
-        illumina = illumina
-        ont_unal_bam = ont_unal_bam
+        //ont = ont
+        //ont_illumina = ont_illumina
+        //illumina = illumina
+        ont = ont_ch
         //replicates = replicates_ch
 }
 
@@ -141,64 +157,65 @@ workflow {
     samtools_fai_index = INDEX_REFERENCE.out.ref_indexed_ch // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
 
     ////////////////// parse design
-        parse_design( params.design )
-        ont_reads = parse_design.out.ont
-        ont_unal_bam = parse_design.out.ont_unal_bam
-        ont_illumina = parse_design.out.ont_illumina
-        illumina_reads = parse_design.out.illumina
-        
-        if (params.debug) { 
-            // for debugging view ont reads
-            ont_reads.view() 
-        }
+    parse_design( params.design )
+    ont_reads = parse_design.out.ont
+
+    //ont_unal_bam = parse_design.out.ont_unal_bam
+    //ont_illumina = parse_design.out.ont_illumina
+    //illumina_reads = parse_design.out.illumina
+    
+    if (params.debug) { 
+        // for debugging view ont reads
+        ont_reads.view() 
+    }
 
     // trimming upstream of assembly and alignment
     if ( params.dorado_trim ) { 
         println("Dorado trim sequencing kit set to ${params.default_dorado_seq_kit}")
+        DORADO_TRIM( ont_reads )
 
-        // Here we are going to : 
-        // 1. run dorado trim on unal bam (save output to ont_unal_bam)
-        // 2. use samtools to generate a new fastq (tmp.fastq)
-        // 3. run porechop_abi on the fastq (save to ont_reads )
+        println("Samtools convert to fastq")
+        SAMTOOLS_CONVERT_BAM_TO_FASTQ( DORADO_TRIM.out.dorado_trim_output_ch )
+
+        //println("Porechop")
+        PORECHOP( SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq )
+
+        //ont_unal_bam = DORADO_TRIM.out.dorado_trim_output_ch
+        ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq
+        ont_porechop = PORECHOP.out.porechop_ch
+    } 
+
+    /*
+    /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
+    if (params.use_illumina) {
+
+        if (params.debug) { println("RUNNING ILLUMINA PIPELINE") }
+
+        // atria
+        atria( illumina_reads )
+
+        // bwa 
+        bwa_align( atria.out.fqs )
+
+        // filter alignments
+        filter_bam( bwa_align.out.bams )
+
+        // deepvariant
+        deepvariant( filter_bam.out.filter_bam_bai )
 
     } else { 
-
-        // Here we are going to : 
-        // 1. run porechop abi on fastq (save to ont_reads)
-        // 2. use samtools to generate a new bam (ont_unal_bam)
-
+        if (params.debug) { println("SKIPPING ILLUMINA") }
     }
-
-
-    /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
-        if (params.use_illumina) {
-
-            if (params.debug) { println("RUNNING ILLUMINA PIPELINE") }
-
-            // atria
-            atria( illumina_reads )
-
-            // bwa 
-            bwa_align( atria.out.fqs )
-
-            // filter alignments
-            filter_bam( bwa_align.out.bams )
-
-            // deepvariant
-            deepvariant( filter_bam.out.filter_bam_bai )
-
-        } else { 
-            if (params.debug) { println("SKIPPING ILLUMINA") }
-        }
+    */
         
     /////////////////// prelim QC on nanopore reads 
-        NANOPLOT_RAW( ont_reads )
+    NANOPLOT_RAW( ont_ch )
 
     ////////////////// ASSEMBLY SECTION /////////////////////
     if (params.assemble_genome) { 
         //Hifasim: assemble ont reads  
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
-        hifasim( ont_reads )
+        hifasim( ont_ch )
 
         // Include an if else here to use verkko instead (may not need to use gfatools, depending on verkko output)
         // assembly QC & polishing with medaka
@@ -215,14 +232,14 @@ workflow {
         if (params.dorado) {
 
             // dorado needs unaligned bam to work, so merge unaligned bam into gfatools.out
-            dorado_input_ch = gfatools
-                .out
-                .fasta_asm
-                .join(ont_unal_bam)
-                .map { sampleID, reads, hapfasta, hapfai, unal_bam  ->
-                    tuple( sampleID, reads, hapfasta, hapfai, unal_bam )
-                 }
-            dorado_input_ch.view { x -> "DORADO INPUT: $x" }
+            //dorado_input_ch = gfatools
+            //    .out
+            //    .fasta_asm
+            //    .join(ont_unal_bam)
+            //    .map { sampleID, reads, hapfasta, hapfai, unal_bam  ->
+            //        tuple( sampleID, reads, hapfasta, hapfai, unal_bam )
+            //     }
+            //dorado_input_ch.view { x -> "DORADO INPUT: $x" }
 
             dorado( dorado_input_ch )
             genome_asm_ch = dorado.out.dorado_output_ch
@@ -238,15 +255,15 @@ workflow {
         dipcall( genome_asm_ch,  samtools_fai_index )
         hapdiff( genome_asm_ch,  samtools_fai_index )
 
-
     }
     ////////////////// VARIANT CALLING SECTION -- From alignment & haplotype phasing /////////////////////
     params.alignment_based_variant_calling = true
     if (params.alignment_based_variant_calling) { 
 
         // MAP READS TO REFERENCE GENOME
-        minimap2( reference_index, ont_reads )
-
+        //minimap2( reference_index, ont_reads )
+        minimap2(reference_index, ont_porechop)
+        
         // clair3 call variants 
         clair3( samtools_fai_index, minimap2.out.bams )
 

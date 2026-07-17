@@ -9,7 +9,7 @@ process NANOPLOT_RAW {
     publishDir "${params.results}/nanoplot_raw", mode : 'copy', pattern : "*"
 
     input : 
-        tuple val(sampleID), val(fastq)
+        tuple val(sampleID), val(bam), val(fastq)
     
     output : 
         path("*")

@@ -4,6 +4,7 @@ process SPECTRE {
     label 'spectre'
 
     publishDir "${params.results}/variants/spectre", mode: 'copy'
+    publishDir "${params.results}/spectre", mode: 'copy'
 
     input:
         tuple val(sampleID), val(bam), val(bai)
@@ -11,6 +12,7 @@ process SPECTRE {
 
     output:
         tuple val(sampleID), path("*.spectre.*"), emit: spectre_cnv_ch
+        path("*mosdepth.regions.bed.gz")
             //path("*.spectre.vcf.gz.tbi"),
             //path("*.spectre.bed.gz"),
             //path("*.spectre.spc"),

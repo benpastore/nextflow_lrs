@@ -5,7 +5,7 @@ process DORADO {
     publishDir "${params.results}/dorado", mode: params.publish_mode
 
     input : 
-        tuple val(sampleID), val(reads), val(hapfasta), val(hapfai), val(unal_bam)
+        tuple val(sampleID), val(unal_bam), val(reads), val(hapfasta), val(hapfai)
     
     output : 
         tuple val(sampleID), val(reads), path("*hap1.doradopolish.fa"), path("*hap2.doradopolish.fa"), emit : dorado_output_ch
@@ -27,5 +27,28 @@ process DORADO {
     awk '/^>hap1_/ {p=1} /^>hap2_/ {p=0} p' polished_assembly.fasta > \${name}.hap1.doradopolish.fa
     awk '/^>hap2_/ {p=1} /^>hap1_/ {p=0} p' polished_assembly.fasta > \${name}.hap2.doradopolish.fa
 
+    """
+}
+
+process DORADO_TRIM { 
+
+    label 'dorado'
+
+    publishDir "${params.results}/dorado", mode: params.publish_mode
+
+    input : 
+        tuple val(sampleID), val(unal_bam), val(fastq)
+    
+    output : 
+        tuple val(sampleID), path("*dorado.trim.bam"), emit : dorado_trim_output_ch
+    
+    script : 
+    """
+    #!/bin/bash
+
+    name=\$(basename ${unal_bam} .bam)
+    dorado trim --sequencing-kit SQK-LSK114 ${unal_bam} > \$name.dorado.trim.bam
+
+    
     """
 }

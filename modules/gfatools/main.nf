@@ -6,10 +6,10 @@ process GFA_CONVERT {
     publishDir "${params.results}/gfatools", mode: params.publish_mode
 
     input: 
-        tuple val(sampleID), val(reads), path(hap1), path(hap2)
+        tuple val(sampleID), val(bam), val(reads), path(hap1), path(hap2)
 
     output: 
-        tuple val(sampleID), val(reads), path("*.haps.combined.fa"), emit: combined_fa
+        tuple val(sampleID), val(bam), val(reads), path("*.haps.combined.fa"), emit: combined_fa
 
     script:
     """
@@ -32,11 +32,11 @@ process GFA_FAIDX {
     publishDir "${params.results}/gfatools", mode: params.publish_mode
 
     input:
-        tuple val(sampleID), val(reads), path(combined_fa)
+        tuple val(sampleID), val(bam), val(reads), path(combined_fa)
 
     output:
-        tuple val(sampleID), val(reads), path(combined_fa), path("${combined_fa}.fai"), emit: fasta_asm
-        tuple val(sampleID), val(reads), path("*hap1.fa"), path("*hap2.fa"), emit: haplotype_fasta_asm
+        tuple val(sampleID), val(bam), val(reads), path(combined_fa), path("${combined_fa}.fai"), emit: fasta_asm
+        tuple val(sampleID), val(bam), val(reads), path("*hap1.fa"), path("*hap2.fa"), emit: haplotype_fasta_asm
 
 
     script:
