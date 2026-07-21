@@ -130,7 +130,7 @@ process INDEX_FLYE_ASSEMBLY {
 process SAMTOOLS_CONVERT_BAM_TO_FASTQ {
 
     tag "convert_bam2fastq"
-    label 'samtools'
+    label 'samtools_high'
 
     publishDir "${params.results}/samtools", mode: params.publish_mode
 
@@ -143,7 +143,8 @@ process SAMTOOLS_CONVERT_BAM_TO_FASTQ {
     script:
     """
     #!/bin/bash
-    
+
+    set -euo pipefail    
     name=\$(basename ${unal_bam} .bam)
     samtools fastq -@ ${task.cpus} ${unal_bam} | gzip > \$name.fastq.gz
 
