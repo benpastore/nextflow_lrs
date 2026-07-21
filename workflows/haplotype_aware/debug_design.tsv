@@ -1,6 +1,0 @@
-SAMPLE	ONT	ONT_UNAL_BAM	R1_ILLUMINA	R2_ILLUMINA
-mild_run_2	/fs/ess/PAS0631/Bam_and_fq_files/PBE11467_pass_d8be597c_f36dd21e_0.fastq.gz	/fs/ess/PAS0631/Bam_and_fq_files/PBE11467_pass_d8be597c_f36dd21e_0.bam		
-mild_run_1	/fs/ess/PAS0631/Bam_and_fq_files/PBE11707_pass_03d5fe78_7f3a6ae6_0.fastq.gz	/fs/ess/PAS0631/Bam_and_fq_files/PBE11707_pass_03d5fe78_7f3a6ae6_0.bam		
-maternal	/fs/ess/PAS0631/Bam_and_fq_files/PBE11917_pass_d451a444_5a1e23f4_0.fastq.gz	/fs/ess/PAS0631/Bam_and_fq_files/PBE11917_pass_d451a444_5a1e23f4_0.bam		
-paternal	/fs/ess/PAS0631/Bam_and_fq_files/PBE12403_pass_a2cdc5d6_16626130_0.fastq.gz	/fs/ess/PAS0631/Bam_and_fq_files/PBE12403_pass_a2cdc5d6_16626130_0.bam		
-severe_run_1	/fs/ess/PAS0631/Bam_and_fq_files/PBE46638_pass_73840dbc_119c63e7_0.fastq.gz	/fs/ess/PAS0631/Bam_and_fq_files/PBE46638_pass_73840dbc_119c63e7_0.bam		

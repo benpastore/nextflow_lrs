@@ -141,6 +141,11 @@ workflow parse_design {
 workflow { 
 
     /*
+    To Do: 
+    - Dorado2 base calling with methylation detection
+    */
+
+    /*
     ////////////////////////////////////////////////////////////////////
     Validate mandatory inputs (design, genome, junctions, results, outprefix)
     ////////////////////////////////////////////////////////////////////
@@ -168,6 +173,11 @@ workflow {
         // for debugging view ont reads
         ont_reads.view() 
     }
+
+    // dorado2 basecall
+    // input: sample, /path/to/pod5
+    // output: bam / fastq
+    // combine sample bam/fastq
 
     // trimming upstream of assembly and alignment
     if ( params.dorado_trim ) { 
@@ -241,7 +251,7 @@ workflow {
             //     }
             //dorado_input_ch.view { x -> "DORADO INPUT: $x" }
 
-            dorado( dorado_input_ch )
+            dorado( gfatools.out.fasta_asm )
             genome_asm_ch = dorado.out.dorado_output_ch
         } else { 
             genome_asm_ch = gfatools.out.haplotype_asm

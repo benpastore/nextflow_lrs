@@ -12,7 +12,8 @@ def process_design(file) :
     #df['simple_name'] = df.apply(lambda row: os.path.basename(row['ONT']).split(".")[0], axis = 1)
     #df['condition'] = df.apply(lambda row: f"{row['Condition']}", axis = 1)
 
-    fastq = df[['SAMPLE', 'ONT', 'ONT_UNAL_BAM', 'R1_ILLUMINA', 'R2_ILLUMINA']]
+    #fastq = df[['SAMPLE', 'ONT', 'ONT_UNAL_BAM', 'R1_ILLUMINA', 'R2_ILLUMINA']]
+    fastq = df[['SAMPLE', 'ONT', 'ONT_UNAL_BAM']]
 
     # to join replicates
     #replicates = df[['simple_name', 'condition']]

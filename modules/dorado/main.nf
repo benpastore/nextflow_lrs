@@ -37,7 +37,7 @@ process DORADO_TRIM {
     publishDir "${params.results}/dorado", mode: params.publish_mode
 
     input : 
-        tuple val(sampleID), val(unal_bam), val(fastq)
+        tuple val(sampleID), val(fastq), val(unal_bam)
     
     output : 
         tuple val(sampleID), path("*dorado.trim.bam"), emit : dorado_trim_output_ch
@@ -47,6 +47,7 @@ process DORADO_TRIM {
     #!/bin/bash
 
     name=\$(basename ${unal_bam} .bam)
+
     dorado trim --sequencing-kit SQK-LSK114 ${unal_bam} > \$name.dorado.trim.bam
 
     

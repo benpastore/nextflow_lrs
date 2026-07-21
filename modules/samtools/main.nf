@@ -145,7 +145,7 @@ process SAMTOOLS_CONVERT_BAM_TO_FASTQ {
     #!/bin/bash
     
     name=\$(basename ${unal_bam} .bam)
-    samtools fastq ${unal_bam} | gzip > \$name.fastq.gz
+    samtools fastq -@ ${task.cpus} ${unal_bam} | gzip > \$name.fastq.gz
 
     """
 }
@@ -153,7 +153,7 @@ process SAMTOOLS_CONVERT_BAM_TO_FASTQ {
 process MERGE_INPUTS {
 
     tag "merge_inputs"
-    label 'samtools'
+    label 'samtools_high'
 
     input:
     tuple val(sample),
@@ -171,8 +171,8 @@ process MERGE_INPUTS {
     cat ${fastqs.join(' ')} > ${sample}.fastq.gz
 
     # Merge BAMs
-    samtools merge -o ${sample}.bam ${bams.join(' ')}
+    samtools merge -@ ${task.cpus} -o ${sample}.bam ${bams.join(' ')}
 
-    samtools index ${sample}.bam
+    samtools index -@ ${task.cpus} ${sample}.bam
     """
 }
