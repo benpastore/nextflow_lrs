@@ -180,20 +180,18 @@ workflow {
     // combine sample bam/fastq
 
     // trimming upstream of assembly and alignment
-    if ( params.dorado_trim ) { 
-        println("Dorado trim sequencing kit set to ${params.default_dorado_seq_kit}")
-        DORADO_TRIM( ont_reads )
+    println("Dorado trim sequencing kit set to ${params.default_dorado_seq_kit}")
+    DORADO_TRIM( ont_reads )
 
-        println("Samtools convert to fastq")
-        SAMTOOLS_CONVERT_BAM_TO_FASTQ( DORADO_TRIM.out.dorado_trim_output_ch )
+    println("Samtools convert to fastq")
+    SAMTOOLS_CONVERT_BAM_TO_FASTQ( DORADO_TRIM.out.dorado_trim_output_ch )
 
-        //println("Porechop")
-        PORECHOP( SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq )
+    //println("Porechop")
+    PORECHOP( SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq )
 
-        //ont_unal_bam = DORADO_TRIM.out.dorado_trim_output_ch
-        ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq
-        ont_porechop = PORECHOP.out.porechop_ch
-    } 
+    //ont_unal_bam = DORADO_TRIM.out.dorado_trim_output_ch
+    ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq
+    ont_porechop = PORECHOP.out.porechop_ch
 
     /*
     /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
@@ -253,8 +251,10 @@ workflow {
 
             dorado( gfatools.out.fasta_asm )
             genome_asm_ch = dorado.out.dorado_output_ch
-        } else { 
+
+        } else {
             genome_asm_ch = gfatools.out.haplotype_asm
+                .map { sampleID, bam, reads, hap1, hap2 -> tuple(sampleID, reads, hap1, hap2) }
         }
 
         // map the asmbley to the reference

@@ -5,7 +5,7 @@ process PORECHOP {
     publishDir "${params.results}/porechop", mode: params.publish_mode
 
     input:
-        tuple val(sampleID), val(fastq)
+        tuple val(sampleID), val(unal_bam), val(fastq)
 
     output:
         tuple val(sampleID), path("*.fastq.gz"), emit : porechop_ch

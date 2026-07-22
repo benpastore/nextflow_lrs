@@ -48,7 +48,7 @@ process DORADO_TRIM {
 
     name=\$(basename ${unal_bam} .bam)
 
-    dorado trim --sequencing-kit SQK-LSK114 ${unal_bam} > \$name.dorado.trim.bam
+    dorado trim --sequencing-kit ${params.default_dorado_seq_kit} ${unal_bam} > \$name.dorado.trim.bam
 
     
     """
