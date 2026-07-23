@@ -68,10 +68,13 @@ include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
 include { dipcall } from '../../subworkflows/ont.nf'
 include { hapdiff } from '../../subworkflows/ont.nf'
+include { genome_stats } from '../../subworkflows/ont.nf'
+include { chrom_coverage } from '../../subworkflows/ont.nf'
 
 // to add 
 include { DORADO_TRIM } from '../../modules/dorado/main.nf'
 include { SAMTOOLS_CONVERT_BAM_TO_FASTQ } from '../../modules/samtools/main.nf'
+include { SAMTOOLS_FASTQ_TO_BAM } from '../../modules/samtools/main.nf'
 include { PORECHOP } from '../../modules/porechop/main.nf'
 include { MERGE_INPUTS } from '../../modules/samtools/main.nf'
 
@@ -193,6 +196,11 @@ workflow {
     ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq
     ont_porechop = PORECHOP.out.porechop_ch
 
+    // rebuild an unaligned bam from the porechop-cleaned fastq so assembly/polish
+    // use adapter-cleaned reads throughout, not just the alignment-based variant calling branch
+    SAMTOOLS_FASTQ_TO_BAM( ont_porechop )
+    ont_ch_clean = SAMTOOLS_FASTQ_TO_BAM.out.fastq_to_bam_ch
+
     /*
     /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
     if (params.use_illumina) {
@@ -223,7 +231,7 @@ workflow {
     if (params.assemble_genome) { 
         //Hifasim: assemble ont reads  
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
-        hifasim( ont_ch )
+        hifasim( ont_ch_clean )
 
         // Include an if else here to use verkko instead (may not need to use gfatools, depending on verkko output)
         // assembly QC & polishing with medaka
@@ -257,8 +265,14 @@ workflow {
                 .map { sampleID, bam, reads, hap1, hap2 -> tuple(sampleID, reads, hap1, hap2) }
         }
 
+        // aggregate read/base counts and assembled genome size for QC
+        genome_stats( genome_asm_ch )
+
         // map the asmbley to the reference
         minimap2_map_asm_to_ref( reference_index, genome_asm_ch)
+
+        // per-chromosome average coverage of the assembly-vs-reference alignment
+        chrom_coverage( minimap2_map_asm_to_ref.out.bams )
 
         //run dip call & hapdiff
         // index the reference genome quickly for dipcall 

@@ -18,7 +18,12 @@ process DORADO {
 
     name=\$(basename ${reads} .fastq.gz)
     # Align unmapped reads to a reference using dorado aligner, sort and index
-    dorado aligner ${hapfasta} ${unal_bam} | samtools sort --threads ${task.cpus} > aligned_reads.bam
+    
+    dorado aligner ${hapfasta} ${unal_bam} | samtools sort --threads ${task.cpus} > aligned_reads.raw.bam
+
+    # dorado polish requires a single read group, but the merged input bam can carry
+    # multiple RGs from its source files -- overwrite them all with one uniform RG
+    samtools addreplacerg -r "@RG\\tID:${sampleID}\\tSM:${sampleID}" -w -@ ${task.cpus} -o aligned_reads.bam aligned_reads.raw.bam
     samtools index aligned_reads.bam
 
     # Call consensus

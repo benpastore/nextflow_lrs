@@ -261,15 +261,41 @@ workflow spectre {
 }
 
 include { STRAGLR } from '../modules/straglr/main.nf'
-workflow straglr { 
+workflow straglr {
 
-    take : 
-        data 
+    take :
+        data
         genome
-    
-    main : 
+
+    main :
         STRAGLR( data, genome )
-    
-    emit : 
+
+    emit :
         straglr = STRAGLR.out.straglr_ch
+}
+
+include { GENOME_STATS } from '../modules/genome_stats/main.nf'
+workflow genome_stats {
+
+    take :
+        data
+
+    main :
+        GENOME_STATS( data )
+
+    emit :
+        genome_stats_ch = GENOME_STATS.out.genome_stats_ch
+}
+
+include { CHROM_COVERAGE } from '../modules/genome_stats/main.nf'
+workflow chrom_coverage {
+
+    take :
+        data
+
+    main :
+        CHROM_COVERAGE( data )
+
+    emit :
+        chrom_coverage_ch = CHROM_COVERAGE.out.chrom_coverage_ch
 }

@@ -151,6 +151,29 @@ process SAMTOOLS_CONVERT_BAM_TO_FASTQ {
     """
 }
 
+process SAMTOOLS_FASTQ_TO_BAM {
+
+    tag "$sampleID"
+    label 'samtools_high'
+
+    publishDir "${params.results}/samtools", mode: params.publish_mode
+
+    input:
+        tuple val(sampleID), path(fastq)
+
+    output:
+        tuple val(sampleID), path("*.porechop.unal.bam"), path(fastq), emit : fastq_to_bam_ch
+
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    name=\$(basename ${fastq} .fastq.gz)
+    samtools import -r "@RG\\tID:${sampleID}\\tSM:${sampleID}" ${fastq} -o \$name.porechop.unal.bam
+    """
+}
+
 process MERGE_INPUTS {
 
     tag "merge_inputs"
