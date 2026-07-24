@@ -198,7 +198,9 @@ workflow {
 
     // rebuild an unaligned bam from the porechop-cleaned fastq so assembly/polish
     // use adapter-cleaned reads throughout, not just the alignment-based variant calling branch
-    SAMTOOLS_FASTQ_TO_BAM( ont_porechop )
+    orig_bam_ch = ont_ch.map { sid, unal_bam, fastq -> tuple(sid, unal_bam) }
+    fastq_to_bam_input = ont_porechop.join(orig_bam_ch)
+    SAMTOOLS_FASTQ_TO_BAM( fastq_to_bam_input )
     ont_ch_clean = SAMTOOLS_FASTQ_TO_BAM.out.fastq_to_bam_ch
 
     /*
@@ -225,7 +227,7 @@ workflow {
     */
         
     /////////////////// prelim QC on nanopore reads 
-    NANOPLOT_RAW( ont_ch )
+    NANOPLOT_RAW( ont_ch_clean )
 
     ////////////////// ASSEMBLY SECTION /////////////////////
     if (params.assemble_genome) { 

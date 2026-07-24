@@ -159,7 +159,7 @@ process SAMTOOLS_FASTQ_TO_BAM {
     publishDir "${params.results}/samtools", mode: params.publish_mode
 
     input:
-        tuple val(sampleID), path(fastq)
+        tuple val(sampleID), path(fastq), path(orig_bam)
 
     output:
         tuple val(sampleID), path("*.unal.bam"), path(fastq), emit : fastq_to_bam_ch
@@ -170,7 +170,15 @@ process SAMTOOLS_FASTQ_TO_BAM {
     set -euo pipefail
 
     name=\$(basename ${fastq} .fastq.gz)
-    rg_line=\$(printf '@RG\\tID:%s\\tSM:%s' "${sampleID}" "${sampleID}")
+
+    # reuse the real @RG line (incl. basecall_model=... that dorado polish needs to
+    # auto-resolve its model) from the original bam -- samtools import alone can only
+    # synthesize a bare ID/SM line, which loses that field entirely
+    rg_line=\$(samtools view -H ${orig_bam} | awk -F'\\t' '\$1=="@RG"' | head -n1)
+    if [ -z "\$rg_line" ]; then
+        rg_line=\$(printf '@RG\\tID:%s\\tSM:%s' "${sampleID}" "${sampleID}")
+    fi
+
     samtools import -r "\$rg_line" ${fastq} -o \${name}.unal.bam
     """
 }
