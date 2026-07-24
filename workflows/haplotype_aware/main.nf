@@ -190,18 +190,28 @@ workflow {
     SAMTOOLS_CONVERT_BAM_TO_FASTQ( DORADO_TRIM.out.dorado_trim_output_ch )
 
     //println("Porechop")
-    PORECHOP( SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq )
+    // porechop confirmed to be a no-op on this data/kit ("No adapters found - output
+    // reads are unchanged from input reads") since dorado trim already strips the real
+    // adapters with a kit-accurate model -- disabled to avoid running it for nothing.
+    // Left in place in case a future kit/run actually needs porechop's adapter cleanup.
+    //PORECHOP( SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq )
 
     //ont_unal_bam = DORADO_TRIM.out.dorado_trim_output_ch
     ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq
-    ont_porechop = PORECHOP.out.porechop_ch
+    //ont_porechop = PORECHOP.out.porechop_ch
 
+    // porechop confirmed to be a no-op on this data/kit ("No adapters found - output
+    // reads are unchanged from input reads") since dorado trim already strips the real
+    // adapters with a kit-accurate model -- disabled for now to avoid the needless
+    // methylation/move-table tag loss from the fastq->bam round-trip. Left in place
+    // in case a future kit/run actually needs porechop's middle-adapter splitting.
+    //
     // rebuild an unaligned bam from the porechop-cleaned fastq so assembly/polish
     // use adapter-cleaned reads throughout, not just the alignment-based variant calling branch
-    orig_bam_ch = ont_ch.map { sid, unal_bam, fastq -> tuple(sid, unal_bam) }
-    fastq_to_bam_input = ont_porechop.join(orig_bam_ch)
-    SAMTOOLS_FASTQ_TO_BAM( fastq_to_bam_input )
-    ont_ch_clean = SAMTOOLS_FASTQ_TO_BAM.out.fastq_to_bam_ch
+    //orig_bam_ch = ont_ch.map { sid, unal_bam, fastq -> tuple(sid, unal_bam) }
+    //fastq_to_bam_input = ont_porechop.join(orig_bam_ch)
+    //SAMTOOLS_FASTQ_TO_BAM( fastq_to_bam_input )
+    //ont_ch_clean = SAMTOOLS_FASTQ_TO_BAM.out.fastq_to_bam_ch
 
     /*
     /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
@@ -226,14 +236,14 @@ workflow {
     }
     */
         
-    /////////////////// prelim QC on nanopore reads 
-    NANOPLOT_RAW( ont_ch_clean )
+    /////////////////// prelim QC on nanopore reads
+    NANOPLOT_RAW( ont_ch )
 
     ////////////////// ASSEMBLY SECTION /////////////////////
-    if (params.assemble_genome) { 
-        //Hifasim: assemble ont reads  
+    if (params.assemble_genome) {
+        //Hifasim: assemble ont reads
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
-        hifasim( ont_ch_clean )
+        hifasim( ont_ch )
 
         // Include an if else here to use verkko instead (may not need to use gfatools, depending on verkko output)
         // assembly QC & polishing with medaka
@@ -288,7 +298,7 @@ workflow {
 
         // MAP READS TO REFERENCE GENOME
         //minimap2( reference_index, ont_reads )
-        minimap2(reference_index, ont_porechop)
+        minimap2(reference_index, ont_ch.map { sid, unal_bam, fastq -> tuple(sid, fastq) })
         
         // clair3 call variants 
         clair3( samtools_fai_index, minimap2.out.bams )
