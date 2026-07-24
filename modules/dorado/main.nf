@@ -23,7 +23,8 @@ process DORADO {
 
     # dorado polish requires a single read group, but the merged input bam can carry
     # multiple RGs from its source files -- overwrite them all with one uniform RG
-    samtools addreplacerg -r "@RG\\tID:${sampleID}\\tSM:${sampleID}" -w -@ ${task.cpus} -o aligned_reads.bam aligned_reads.raw.bam
+    rg_line=\$(printf '@RG\\tID:%s\\tSM:%s' "${sampleID}" "${sampleID}")
+    samtools addreplacerg -r "\$rg_line" -w -@ ${task.cpus} -o aligned_reads.bam aligned_reads.raw.bam
     samtools index aligned_reads.bam
 
     # Call consensus

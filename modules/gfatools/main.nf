@@ -45,8 +45,7 @@ process GFA_FAIDX {
     samtools faidx ${combined_fa}
 
     name=\$(basename ${combined_fa} .fa)
-
-
+    
     awk '/^>hap1_/ {p=1} /^>hap2_/ {p=0} p' ${combined_fa} > \$name.hap1.fa
     awk '/^>hap2_/ {p=1} /^>hap1_/ {p=0} p' ${combined_fa} > \$name.hap2.fa
 

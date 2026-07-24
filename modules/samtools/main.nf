@@ -162,7 +162,7 @@ process SAMTOOLS_FASTQ_TO_BAM {
         tuple val(sampleID), path(fastq)
 
     output:
-        tuple val(sampleID), path("*.porechop.unal.bam"), path(fastq), emit : fastq_to_bam_ch
+        tuple val(sampleID), path("*.unal.bam"), path(fastq), emit : fastq_to_bam_ch
 
     script:
     """
@@ -170,7 +170,8 @@ process SAMTOOLS_FASTQ_TO_BAM {
     set -euo pipefail
 
     name=\$(basename ${fastq} .fastq.gz)
-    samtools import -r "@RG\\tID:${sampleID}\\tSM:${sampleID}" ${fastq} -o \$name.porechop.unal.bam
+    rg_line=\$(printf '@RG\\tID:%s\\tSM:%s' "${sampleID}" "${sampleID}")
+    samtools import -r "\$rg_line" ${fastq} -o \${name}.unal.bam
     """
 }
 
