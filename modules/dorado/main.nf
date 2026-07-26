@@ -22,8 +22,16 @@ process DORADO {
     dorado aligner ${hapfasta} ${unal_bam} | samtools sort --threads ${task.cpus} > aligned_reads.raw.bam
 
     # dorado polish requires a single read group, but the merged input bam can carry
-    # multiple RGs from its source files -- overwrite them all with one uniform RG
-    rg_line=\$(printf '@RG\\tID:%s\\tSM:%s' "${sampleID}" "${sampleID}")
+    # multiple RGs from its source files -- overwrite them all with one uniform RG.
+    # Preserve the DS:basecall_model=... field from the original @RG line, since
+    # dorado polish needs it to auto-resolve its model and addreplacerg -w would
+    # otherwise drop it when synthesizing a bare ID/SM-only RG.
+    ds_field=\$(samtools view -H ${unal_bam} | awk -F'\\t' '\$1=="@RG"' | head -n1 | tr '\\t' '\\n' | grep '^DS:' || true)
+    if [ -n "\$ds_field" ]; then
+        rg_line=\$(printf '@RG\\tID:%s\\tSM:%s\\t%s' "${sampleID}" "${sampleID}" "\$ds_field")
+    else
+        rg_line=\$(printf '@RG\\tID:%s\\tSM:%s' "${sampleID}" "${sampleID}")
+    fi
     samtools addreplacerg -r "\$rg_line" -w -@ ${task.cpus} -o aligned_reads.bam aligned_reads.raw.bam
     samtools index aligned_reads.bam
 
