@@ -1,0 +1,15 @@
+SAMPLE	ONT	ONT_UNAL_BAM
+A_parent110	/fs/ess/PAS0631/Family_A/110_parent/PBC71895_pass_12883417_477c7918_0.fastq.gz	/fs/ess/PAS0631/Family_A/110_parent/PBC71895_pass_12883417_477c7918_0.bam
+A_parent110	/fs/ess/PAS0631/Family_A/110_parent/PBE11656_pass_16b6e45b_21a51336_0.fastq.gz	/fs/ess/PAS0631/Family_A/110_parent/PBE11656_pass_16b6e45b_21a51336_0.bam
+A_parent110	/fs/ess/PAS0631/Family_A/110_parent/PBE12403_pass_a2cdc5d6_16626130_0.fastq.gz	/fs/ess/PAS0631/Family_A/110_parent/PBE12403_pass_a2cdc5d6_16626130_0.bam
+A_parent110	/fs/ess/PAS0631/Family_A/110_parent/PBE12558_pass_40cf0a81_7f322ecc_0.fastq.gz	/fs/ess/PAS0631/Family_A/110_parent/PBE12558_pass_40cf0a81_7f322ecc_0.bam
+A_parent111	/fs/ess/PAS0631/Family_A/111_parent/PBE11917_pass_d451a444_5a1e23f4_0.fastq.gz	/fs/ess/PAS0631/Family_A/111_parent/PBE11917_pass_d451a444_5a1e23f4_0.bam
+A_parent111	/fs/ess/PAS0631/Family_A/111_parent/PBE12026_pass_1d5fad2e_d7dad5f7_0.fastq.gz	/fs/ess/PAS0631/Family_A/111_parent/PBE12026_pass_1d5fad2e_d7dad5f7_0.bam
+A_parent111	/fs/ess/PAS0631/Family_A/111_parent/PBE12227_pass_f54316f6_9c20dc70_0.fastq.gz	/fs/ess/PAS0631/Family_A/111_parent/PBE12227_pass_f54316f6_9c20dc70_0.bam
+A_parent111	/fs/ess/PAS0631/Family_A/111_parent/PBE12359_pass_fd20bbca_4ea0a2b4_0.fastq.gz	/fs/ess/PAS0631/Family_A/111_parent/PBE12359_pass_fd20bbca_4ea0a2b4_0.bam
+A_severe112	/fs/ess/PAS0631/Family_A/112_severe/PBE10655_pass_76fa1d9c_d78ce202_0.fastq.gz	/fs/ess/PAS0631/Family_A/112_severe/PBE10655_pass_76fa1d9c_d78ce202_0.bam
+A_severe112	/fs/ess/PAS0631/Family_A/112_severe/PBE10665_pass_5316f660_edefd2c3_0.fastq.gz	/fs/ess/PAS0631/Family_A/112_severe/PBE10665_pass_5316f660_edefd2c3_0.bam
+A_severe112	/fs/ess/PAS0631/Family_A/112_severe/PBE46638_pass_73840dbc_119c63e7_0.fastq.gz	/fs/ess/PAS0631/Family_A/112_severe/PBE46638_pass_73840dbc_119c63e7_0.bam
+A_severe113	/fs/ess/PAS0631/Family_A/113_mild/PBE10772_pass_6ea29a56_2e8a8b8b_0.fastq.gz	/fs/ess/PAS0631/Family_A/113_mild/PBE10772_pass_6ea29a56_2e8a8b8b_0.bam
+A_severe113	/fs/ess/PAS0631/Family_A/113_mild/PBE11467_pass_d8be597c_f36dd21e_0.fastq.gz	/fs/ess/PAS0631/Family_A/113_mild/PBE11467_pass_d8be597c_f36dd21e_0.bam
+A_severe113	/fs/ess/PAS0631/Family_A/113_mild/PBE11707_pass_03d5fe78_7f3a6ae6_0.fastq.gz	/fs/ess/PAS0631/Family_A/113_mild/PBE11707_pass_03d5fe78_7f3a6ae6_0.bam
