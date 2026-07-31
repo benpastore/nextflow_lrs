@@ -14,9 +14,11 @@ process LONGPHASE {
             path("*.longphase.vcf.gz"),
             path("*.longphase.vcf.gz.tbi"),
             path("*.longphase.haplotagged.bam"),
-            path("*.longphase.haplotagged.bam.bai")
-        
+            path("*.longphase.haplotagged.bam.bai"), emit : longphase_full_ch
+
         tuple val(sampleID), path("*.longphase.haplotagged.bam"), path("*.longphase.haplotagged.bam.bai"), emit : longphase_ch
+
+        tuple val(sampleID), path("*.longphase.vcf.gz"), path("*.longphase.vcf.gz.tbi"), emit : longphase_vcf_ch
 
     script:
     """
@@ -72,9 +74,11 @@ process LONGPHASE_SV {
             path("*.longphase_sv.vcf.gz"),
             path("*.longphase_sv.vcf.gz.tbi"),
             path("*.longphase_sv.haplotagged.bam"),
-            path("*.longphase_sv.haplotagged.bam.bai")
-        
+            path("*.longphase_sv.haplotagged.bam.bai"), emit : longphase_sv_full_ch
+
         tuple val(sampleID), path("*.longphase_sv.haplotagged.bam"), path("*.longphase_sv.haplotagged.bam.bai"), emit : longphase_sv_ch
+
+        tuple val(sampleID), path("*.longphase_sv.vcf.gz"), path("*.longphase_sv.vcf.gz.tbi"), emit : longphase_sv_vcf_ch
 
     script:
     """

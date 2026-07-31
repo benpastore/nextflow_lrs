@@ -81,11 +81,12 @@ workflow hapdiff {
         data 
         genome
     
-    main : 
+    main :
         HAPDIFF( data, genome )
-    
-    emit : 
+
+    emit :
         hapdiff_ch = HAPDIFF.out.hapdiff_ch
+        hapdiff_unphased_ch = HAPDIFF.out.hapdiff_unphased_ch
 
 }
 
@@ -212,10 +213,11 @@ workflow longphase {
     take : 
         ref
         data
-    main : 
+    main :
         LONGPHASE( ref, data )
-    emit : 
+    emit :
         longphase_ch = LONGPHASE.out.longphase_ch
+        longphase_vcf_ch = LONGPHASE.out.longphase_vcf_ch
 }
 
 include { LONGPHASE_SV } from '../modules/longphase/main.nf'
@@ -225,11 +227,12 @@ workflow longphase_sv {
         ref
         data
 
-    main : 
+    main :
         LONGPHASE_SV( ref, data )
 
-    emit : 
+    emit :
         longphase_sv_ch = LONGPHASE_SV.out.longphase_sv_ch
+        longphase_sv_vcf_ch = LONGPHASE_SV.out.longphase_sv_vcf_ch
 }
 
 include { SNIFFLES } from '../modules/sniffles/main.nf'
@@ -298,4 +301,17 @@ workflow chrom_coverage {
 
     emit :
         chrom_coverage_ch = CHROM_COVERAGE.out.chrom_coverage_ch
+}
+
+include { CONSOLIDATE_VARIANTS } from '../modules/consolidate_variants/main.nf'
+workflow consolidate_variants {
+
+    take :
+        data
+
+    main :
+        CONSOLIDATE_VARIANTS( data )
+
+    emit :
+        consolidated_ch = CONSOLIDATE_VARIANTS.out.consolidated_ch
 }

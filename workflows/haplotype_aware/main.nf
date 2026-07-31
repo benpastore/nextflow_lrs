@@ -70,6 +70,7 @@ include { dipcall } from '../../subworkflows/ont.nf'
 include { hapdiff } from '../../subworkflows/ont.nf'
 include { genome_stats } from '../../subworkflows/ont.nf'
 include { chrom_coverage } from '../../subworkflows/ont.nf'
+include { consolidate_variants } from '../../subworkflows/ont.nf'
 
 // to add 
 include { DORADO_TRIM } from '../../modules/dorado/main.nf'
@@ -240,6 +241,11 @@ workflow {
     NANOPLOT_RAW( ont_ch )
 
     ////////////////// ASSEMBLY SECTION /////////////////////
+    // default (no-assembly) placeholders so the variant consolidation join below
+    // always has a channel to join against, even when assembly is skipped
+    dipcall_vcf_ch = Channel.empty()
+    hapdiff_vcf_ch = Channel.empty()
+
     if (params.assemble_genome) {
         //Hifasim: assemble ont reads
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
@@ -291,6 +297,11 @@ workflow {
         dipcall( genome_asm_ch,  samtools_fai_index )
         hapdiff( genome_asm_ch,  samtools_fai_index )
 
+        // assembly-based variant calls, for the master variant table below
+        dipcall_vcf_ch = dipcall.out.dipcall
+            .map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
+        hapdiff_vcf_ch = hapdiff.out.hapdiff_ch
+
     }
     ////////////////// VARIANT CALLING SECTION -- From alignment & haplotype phasing /////////////////////
     params.alignment_based_variant_calling = true
@@ -336,6 +347,35 @@ workflow {
 
         // spectre CNV
         spectre( haplo_ch_v2, samtools_fai_index )
+
+        ////////////////// CONSOLIDATE VARIANTS SECTION /////////////////////
+        // master per-sample VCF: alignment-based (clair3 small variants,
+        // phased+SV-aware via longphase_sv) + sniffles (SV) callers, joined
+        // with assembly-based (dipcall, hapdiff) callers when available.
+        // Each caller keeps its own (phase-aware) genotype column so
+        // haplotype info is preserved; INFO/CALLERS + INFO/NUM_CALLERS
+        // record which/how many callers detected each variant.
+        clair3_longphase_vcf_ch = longphase_sv.out.longphase_sv_vcf_ch
+            .map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
+
+        sniffles_vcf_ch = sniffles.out.sniffles_ch
+            .map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
+
+        consolidate_input_ch = clair3_longphase_vcf_ch
+            .join(sniffles_vcf_ch)
+            .join(dipcall_vcf_ch, remainder: true)
+            .join(hapdiff_vcf_ch, remainder: true)
+            .map { sampleID, longphase_vcf, sniffles_vcf, dipcall_vcf, hapdiff_vcf ->
+                tuple(
+                    sampleID,
+                    longphase_vcf,
+                    sniffles_vcf,
+                    dipcall_vcf ?: file("NO_FILE"),
+                    hapdiff_vcf ?: file("NO_FILE")
+                )
+            }
+
+        consolidate_variants( consolidate_input_ch )
 
     }
 

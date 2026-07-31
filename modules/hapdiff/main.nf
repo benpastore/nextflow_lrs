@@ -8,8 +8,9 @@ process HAPDIFF {
         tuple val(sampleID), val(reads), val(hap1), val(hap2)
         tuple path(ref), path(ref_fai)
 
-    output : 
-        tuple val(sampleID), path("*phased.vcf.gz"), emit : hapdiff_ch
+    output :
+        tuple val(sampleID), path("*.hapdiff.phased.vcf.gz"), emit : hapdiff_ch
+        tuple val(sampleID), path("*.hapdiff.unphased.vcf.gz"), emit : hapdiff_unphased_ch
 
     script : 
     """
