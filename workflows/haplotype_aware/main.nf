@@ -52,6 +52,7 @@ include { deepvariant } from '../../subworkflows/illumina.nf'
 
 /////////////// ONT //////////////////
 include { hifasim } from '../../subworkflows/ont.nf'
+include { hifasim_trio } from '../../subworkflows/ont.nf'
 include { gfatools } from '../../subworkflows/ont.nf'
 include { dorado } from '../../subworkflows/ont.nf'
 
@@ -66,6 +67,8 @@ include { clair3 } from '../../subworkflows/ont.nf'
 include { sniffles } from '../../subworkflows/ont.nf'
 include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
+include { paraphase } from '../../subworkflows/ont.nf'
+include { modkit } from '../../subworkflows/ont.nf'
 include { dipcall } from '../../subworkflows/ont.nf'
 include { hapdiff } from '../../subworkflows/ont.nf'
 include { genome_stats } from '../../subworkflows/ont.nf'
@@ -73,7 +76,12 @@ include { chrom_coverage } from '../../subworkflows/ont.nf'
 include { consolidate_variants } from '../../subworkflows/ont.nf'
 include { alphagenome } from '../../subworkflows/ont.nf'
 
-// to add 
+include { hero_correction } from '../../subworkflows/hero.nf'
+include { trio_family } from '../../subworkflows/trio.nf'
+include { WHATSHAP_PHASE_TRIO } from '../../modules/whatshap/main.nf'
+include { pod5_basecall } from '../../subworkflows/pod5.nf'
+
+// to add
 include { DORADO_TRIM } from '../../modules/dorado/main.nf'
 include { SAMTOOLS_CONVERT_BAM_TO_FASTQ } from '../../modules/samtools/main.nf'
 include { SAMTOOLS_FASTQ_TO_BAM } from '../../modules/samtools/main.nf'
@@ -155,34 +163,36 @@ workflow {
     Validate mandatory inputs (design, genome, junctions, results, outprefix)
     ////////////////////////////////////////////////////////////////////
     */
-    if (params.design)    { ch_design = file(params.design, checkIfExists: true) } else { exit 1, 'Design file not specified!' }
+    if (params.pod5_design) {
+        ch_pod5_design = file(params.pod5_design, checkIfExists: true)
+    } else if (params.design) {
+        ch_design = file(params.design, checkIfExists: true)
+    } else {
+        exit 1, 'Neither --design nor --pod5_design specified!'
+    }
     if (params.genome)    { ch_genome = file(params.genome, checkIfExists: true) } else { exit 1, 'Genome fasta not specified!' }
     if (params.outprefix) { ; } else {'Outprefix not specified! Defaulting to ONT_ANALYSIS'; params.outprefix = 'ONT_ANALYSIS' }
 
-    // upstream of everything make sure minimap2 index is built for reference 
+    // upstream of everything make sure minimap2 index is built for reference
     minimap2_index( params.genome, params.index ) // THIS GENERATES THE MINIMAP2 ALIGNMENT INDEX
     reference_index = minimap2_index.out.index // THIS GENERATES THE MINIMAP2 ALIGNMENT INDEX
 
     INDEX_REFERENCE( params.genome ) // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
     samtools_fai_index = INDEX_REFERENCE.out.ref_indexed_ch // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
 
-    ////////////////// parse design
-    parse_design( params.design )
-    ont_reads = parse_design.out.ont
+    ////////////////// parse design (or basecall from pod5, if pod5_design is set)
+    if (params.pod5_design) {
+        pod5_basecall( params.pod5_design )
+        ont_reads = pod5_basecall.out.ont
+    } else {
+        parse_design( params.design )
+        ont_reads = parse_design.out.ont
+    }
 
-    //ont_unal_bam = parse_design.out.ont_unal_bam
-    //ont_illumina = parse_design.out.ont_illumina
-    //illumina_reads = parse_design.out.illumina
-    
     if (params.debug) { 
         // for debugging view ont reads
         ont_reads.view() 
     }
-
-    // dorado2 basecall
-    // input: sample, /path/to/pod5
-    // output: bam / fastq
-    // combine sample bam/fastq
 
     // trimming upstream of assembly and alignment
     println("Dorado trim sequencing kit set to ${params.default_dorado_seq_kit}")
@@ -191,55 +201,33 @@ workflow {
     println("Samtools convert to fastq")
     SAMTOOLS_CONVERT_BAM_TO_FASTQ( DORADO_TRIM.out.dorado_trim_output_ch )
 
-    //println("Porechop")
-    // porechop confirmed to be a no-op on this data/kit ("No adapters found - output
-    // reads are unchanged from input reads") since dorado trim already strips the real
-    // adapters with a kit-accurate model -- disabled to avoid running it for nothing.
-    // Left in place in case a future kit/run actually needs porechop's adapter cleanup.
-    //PORECHOP( SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq )
-
     //ont_unal_bam = DORADO_TRIM.out.dorado_trim_output_ch
     ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq
-    //ont_porechop = PORECHOP.out.porechop_ch
 
-    // porechop confirmed to be a no-op on this data/kit ("No adapters found - output
-    // reads are unchanged from input reads") since dorado trim already strips the real
-    // adapters with a kit-accurate model -- disabled for now to avoid the needless
-    // methylation/move-table tag loss from the fastq->bam round-trip. Left in place
-    // in case a future kit/run actually needs porechop's middle-adapter splitting.
-    //
-    // rebuild an unaligned bam from the porechop-cleaned fastq so assembly/polish
-    // use adapter-cleaned reads throughout, not just the alignment-based variant calling branch
-    //orig_bam_ch = ont_ch.map { sid, unal_bam, fastq -> tuple(sid, unal_bam) }
-    //fastq_to_bam_input = ont_porechop.join(orig_bam_ch)
-    //SAMTOOLS_FASTQ_TO_BAM( fastq_to_bam_input )
-    //ont_ch_clean = SAMTOOLS_FASTQ_TO_BAM.out.fastq_to_bam_ch
-
-    /*
-    /////////////////// ILLUMINA SECTION **OPTIONAL** /////////////
-    if (params.use_illumina) {
-
-        if (params.debug) { println("RUNNING ILLUMINA PIPELINE") }
-
-        // atria
-        atria( illumina_reads )
-
-        // bwa 
-        bwa_align( atria.out.fqs )
-
-        // filter alignments
-        filter_bam( bwa_align.out.bams )
-
-        // deepvariant
-        deepvariant( filter_bam.out.filter_bam_bai )
-
-    } else { 
-        if (params.debug) { println("SKIPPING ILLUMINA") }
-    }
-    */
-        
-    /////////////////// prelim QC on nanopore reads
+    /////////////////// prelim QC on nanopore reads (always on raw reads, before HERO correction)
     NANOPLOT_RAW( ont_ch )
+
+    ////////////////// HYBRID ERROR CORRECTION (HERO) /////////////////////
+    // samples with a matching entry in params.illumina_design get fmlrc2-precorrected
+    // + HERO-corrected reads; samples without matched Illumina data pass through
+    // unchanged. Feeds assembly and alignment below.
+    hero_correction( ont_ch, params.illumina_design )
+    ont_ch_corrected = hero_correction.out.ont_ch
+
+    ////////////////// TRIO / HAPLOTYPE FAMILY STRUCTURE /////////////////////
+    // params.run_trio_analysis is the single on/off switch for all
+    // trio-specific behavior (hifiasm trio-binning + WhatsHap pedigree
+    // phasing below). Flip it off for singular-genome runs without having
+    // to also unset/remove family_json. When off (or family_json unset),
+    // trio_family is never called and every child just takes the regular
+    // non-trio assembly path below.
+    run_trio = params.run_trio_analysis && params.family_json
+    if (run_trio) {
+        // computed once, reused at both the assembly gate below and the
+        // phasing gate further down -- avoids re-parsing family_json or
+        // re-running yak/deepvariant for the same parents twice
+        trio_family( params.family_json, params.illumina_design )
+    }
 
     ////////////////// ASSEMBLY SECTION /////////////////////
     // default (no-assembly) placeholders so the variant consolidation join below
@@ -250,31 +238,41 @@ workflow {
     if (params.assemble_genome) {
         //Hifasim: assemble ont reads
         if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
-        hifasim( ont_ch )
 
-        // Include an if else here to use verkko instead (may not need to use gfatools, depending on verkko output)
-        // assembly QC & polishing with medaka
-        // # contigs, % completeness, contig size 
-        // go directly into dipcall from hifiasm 
-        // minimira --> remove ligation based artifacts
+        if (run_trio) {
+            // children with a fully-resolved trio (both parents' yak dbs
+            // available) get hifiasm trio-binning; everyone else gets the
+            // regular non-trio assembly. Merged back into one channel shaped
+            // like hifasim.out.hifasim_asm so nothing further downstream
+            // (gfatools/dorado/dipcall/hapdiff) needs to know which path a
+            // given sample took.
+            assembly_gate = ont_ch_corrected
+                .join( trio_family.out.trio_assembly, remainder: true )
+                .branch {
+                    has_trio: it[3] != null
+                    no_trio: true
+                }
+
+            hifasim( assembly_gate.no_trio.map { sid, bam, fastq, pat_yak, mat_yak -> tuple(sid, bam, fastq) } )
+
+            hifasim_trio( assembly_gate.has_trio.map { sid, bam, fastq, pat_yak, mat_yak -> tuple(sid, bam, fastq, pat_yak, mat_yak) } )
+
+            hifasim_asm_ch = hifasim.out.hifasim_asm.mix( hifasim_trio.out.hifasim_trio_asm )
+        } else {
+            // singular-genome mode: no trio structure, everyone takes the
+            // regular non-trio assembly path
+            hifasim( ont_ch_corrected )
+            hifasim_asm_ch = hifasim.out.hifasim_asm
+        }
+
         // use jasmine to combine variant calls from multiple callers
         // use busco to assess quality of assembly
 
-        //convert hifasim to fasta 
-        gfatools( hifasim.out.hifasim_asm )
+        //convert hifasim to fasta
+        gfatools( hifasim_asm_ch )
 
         // include dorado polish
         if (params.dorado) {
-
-            // dorado needs unaligned bam to work, so merge unaligned bam into gfatools.out
-            //dorado_input_ch = gfatools
-            //    .out
-            //    .fasta_asm
-            //    .join(ont_unal_bam)
-            //    .map { sampleID, reads, hapfasta, hapfai, unal_bam  ->
-            //        tuple( sampleID, reads, hapfasta, hapfai, unal_bam )
-            //     }
-            //dorado_input_ch.view { x -> "DORADO INPUT: $x" }
 
             dorado( gfatools.out.fasta_asm )
             genome_asm_ch = dorado.out.dorado_output_ch
@@ -310,7 +308,7 @@ workflow {
 
         // MAP READS TO REFERENCE GENOME
         //minimap2( reference_index, ont_reads )
-        minimap2(reference_index, ont_ch.map { sid, unal_bam, fastq -> tuple(sid, fastq) })
+        minimap2(reference_index, ont_ch_corrected.map { sid, unal_bam, fastq -> tuple(sid, fastq) })
         
         // clair3 call variants 
         clair3( samtools_fai_index, minimap2.out.bams )
@@ -349,6 +347,12 @@ workflow {
         // spectre CNV
         spectre( haplo_ch_v2, samtools_fai_index )
 
+        // paraphase (SMA/SMN1-SMN2 region reconstruction from segmental duplications)
+        paraphase( haplo_ch_v2, samtools_fai_index )
+
+        // methylation pileup (5mCG/5hmCG), split by haplotype via longphase_sv's HP tags
+        modkit( haplo_ch_v2, samtools_fai_index )
+
         ////////////////// CONSOLIDATE VARIANTS SECTION /////////////////////
         // master per-sample VCF: alignment-based (clair3 small variants,
         // phased+SV-aware via longphase_sv) + sniffles (SV) callers, joined
@@ -377,6 +381,29 @@ workflow {
             }
 
         consolidate_variants( consolidate_input_ch )
+
+        ////////////////// TRIO-AWARE PEDIGREE PHASING (children only) /////////////////////
+        // Runs after variant consolidation (children-only step; parents never
+        // appear in longphase_sv/haplo_ch_v2 at all, since they're never run
+        // as full samples -- see trio_family). Additive refinement of the
+        // child's longphase_sv-phased small variants using Mendelian
+        // constraints from both parents' genotype VCFs (WhatsHap --ped).
+        // Phases the same clair3/longphase small-variant VCF consolidate_variants
+        // consumed above, not the master.vcf itself -- that file's sample
+        // columns are caller names, not sample IDs, and it mixes in symbolic
+        // SV records neither of which WhatsHap can phase. This step doesn't
+        // feed back into consolidate_variants/longphase_sv/straglr/spectre --
+        // it's purely an extra, separately-published output.
+        if (run_trio) {
+            trio_phasing_input = longphase_sv.out.longphase_sv_vcf_ch
+                .join( haplo_ch_v2 )
+                .join( trio_family.out.trio_phasing )
+                .map { sampleID, vcf, tbi, bam, bai, father, mother, father_vcf, mother_vcf ->
+                    tuple(sampleID, father, mother, vcf, bam, bai, father_vcf, mother_vcf)
+                }
+
+            WHATSHAP_PHASE_TRIO( samtools_fai_index, trio_phasing_input )
+        }
 
         ////////////////// ALPHAGENOME VARIANT-EFFECT ANNOTATION /////////////////////
         // scaffold only -- disabled by default until bin/run_alphagenome.py's

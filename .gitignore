@@ -34,4 +34,4 @@ models/
 **/.ipynb_checkpoints/
 
 # Temporary/debug files
-*_debug.txt
+*_debug.txt.DS_Store

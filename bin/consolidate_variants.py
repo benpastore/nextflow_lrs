@@ -36,6 +36,7 @@ Two ways to run this:
      per sample (longphase_sv > longphase > clair3) rather than using
      more than one, since those all trace back to the same clair3 calls.
 """
+
 import argparse
 import gzip
 import os

@@ -14,6 +14,20 @@ workflow hifasim {
 
 }
 
+include { HIFASIM_TRIO } from '../modules/hifasim/main.nf'
+workflow hifasim_trio {
+
+    take :
+        data
+
+    main :
+        HIFASIM_TRIO( data )
+
+    emit :
+        hifasim_trio_asm = HIFASIM_TRIO.out.hifasim_trio_asm
+
+}
+
 include { GFA_CONVERT } from '../modules/gfatools/main.nf'
 include { GFA_FAIDX } from '../modules/gfatools/main.nf'
 workflow gfatools { 
@@ -275,6 +289,34 @@ workflow straglr {
 
     emit :
         straglr = STRAGLR.out.straglr_ch
+}
+
+include { PARAPHASE } from '../modules/paraphase/main.nf'
+workflow paraphase {
+
+    take :
+        data
+        genome
+
+    main :
+        PARAPHASE( data, genome )
+
+    emit :
+        paraphase = PARAPHASE.out.paraphase_ch
+}
+
+include { MODKIT_PILEUP } from '../modules/modkit/main.nf'
+workflow modkit {
+
+    take :
+        data
+        genome
+
+    main :
+        MODKIT_PILEUP( data, genome )
+
+    emit :
+        modkit = MODKIT_PILEUP.out.modkit_ch
 }
 
 include { GENOME_STATS } from '../modules/genome_stats/main.nf'

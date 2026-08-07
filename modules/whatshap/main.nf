@@ -62,3 +62,44 @@ process WHATSHAP_HAPLOTAG {
     samtools index \$name.happlotagged.bam
     """
 }
+
+process WHATSHAP_PHASE_TRIO {
+
+    label 'whatshap'
+    tag "${child}"
+    publishDir "${params.results}/variants/whatshap_trio_phased", mode: params.publish_mode
+
+    // Additive, trio-aware refinement of the child's small-variant phasing,
+    // run alongside (not instead of) the existing longphase-based
+    // WHATSHAP_PHASE/longphase_sv path. Parents contribute genotype-only
+    // Mendelian constraints from their own Illumina VCF -- no parental BAM
+    // is required for whatshap's pedigree mode to improve child phasing.
+    input:
+        tuple val(ref), val(ref_fai)
+        tuple val(child), val(father), val(mother), val(child_vcf), val(child_bam), val(child_bai), val(father_vcf), val(mother_vcf)
+
+    output:
+        tuple val(child), path("*.trio.whatshapphase.vcf.gz"), path("*.trio.whatshapphase.vcf.gz.tbi"), emit : whatshap_phase_trio_ch
+
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    printf "%s\\t%s\\t%s\\t%s\\t0\\t0\\n" "${child}_family" "${child}" "${father}" "${mother}" > ${child}.ped
+    printf "%s\\t%s\\t0\\t0\\t1\\t0\\n" "${child}_family" "${father}" >> ${child}.ped
+    printf "%s\\t%s\\t0\\t0\\t2\\t0\\n" "${child}_family" "${mother}" >> ${child}.ped
+
+    whatshap phase \\
+      --ped ${child}.ped \\
+      --reference ${ref} \\
+      --ignore-read-groups \\
+      --output ${child}.trio.whatshapphase.vcf.gz \\
+      ${child_vcf} \\
+      ${father_vcf} \\
+      ${mother_vcf} \\
+      ${child_bam}
+
+    bcftools index -f -t ${child}.trio.whatshapphase.vcf.gz
+    """
+}

@@ -14,8 +14,11 @@ process DEEPVARIANT_CALL_VARIANTS {
         tuple val(condition), val(bam), val(bai)
         val genome
 
-    output : 
-        tuple val(condition), val("*.vcf.gz"), val("*.vcf.gz.tbi"), emit : deepvariant_vcf_ch
+    output :
+        // narrowed to the small-variant vcf specifically -- "*.vcf.gz" also
+        // matches "${condition}.dv.gvcf.gz" since gzip's glob upstream
+        // catches both, which would otherwise make this a 2-file list
+        tuple val(condition), path("${condition}.dv.vcf.gz"), path("${condition}.dv.vcf.gz.tbi"), emit : deepvariant_vcf_ch
         //tuple val(condition), val("*.gvcf.gz"), emit : deepvariant_gvcf_ch
         //path("*")
         //path("*vcf.gz"), emit : vcf

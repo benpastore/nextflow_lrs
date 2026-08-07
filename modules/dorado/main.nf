@@ -44,7 +44,33 @@ process DORADO {
     """
 }
 
-process DORADO_TRIM { 
+process DORADO_BASECALL {
+
+    tag "$sampleID"
+    label 'dorado'
+
+    publishDir "${params.results}/dorado_basecall", mode: params.publish_mode
+
+    input :
+        tuple val(sampleID), val(pod5_dir)
+
+    output :
+        tuple val(sampleID), path("*.unal.bam"), emit : dorado_basecall_ch
+
+    script :
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    dorado basecaller \\
+        ${params.dorado_basecall_model} \\
+        ${pod5_dir} \\
+        --kit-name ${params.default_dorado_seq_kit} \\
+        > ${sampleID}.unal.bam
+    """
+}
+
+process DORADO_TRIM {
 
     label 'dorado'
 

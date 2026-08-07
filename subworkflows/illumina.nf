@@ -10,6 +10,29 @@ include { DEEPVARIANT_CALL_VARIANTS } from '../modules/deepvariant/main.nf'
 
 nextflow.enable.dsl=2
 
+// Shared parser for the "sample,r1,r2" Illumina design csv -- used both by
+// hero_correction (children needing hybrid error correction) and
+// trio_family (parents needing a yak db / short-read VCF), so any sampleID
+// with Illumina reads only has to be declared once, in one file.
+workflow parse_illumina_reads {
+
+    take:
+        illumina_design  // path to csv (sample,r1,r2), or false/"" to disable
+
+    main:
+        if (illumina_design) {
+            reads_ch = Channel
+                .fromPath(file(illumina_design, checkIfExists: true))
+                .splitCsv(header: ['sample', 'r1', 'r2'], sep: ',', skip: 1)
+                .map { row -> tuple(row.sample, file(row.r1), file(row.r2)) }
+        } else {
+            reads_ch = Channel.empty()
+        }
+
+    emit:
+        reads = reads_ch
+}
+
 workflow atria {
 
     take : 

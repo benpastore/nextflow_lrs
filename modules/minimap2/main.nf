@@ -76,11 +76,15 @@ process MINIMAP2_ALIGN {
         
     name=\$(basename ${fastq} .fastq.gz)
 
+    # -y copies the MM/ML methylation tags (carried as fastq comments by
+    # SAMTOOLS_CONVERT_BAM_TO_FASTQ's -T flag) back onto the aligned reads --
+    # without it they're silently dropped here even if present in the fastq.
     minimap2 \\
         -t ${task.cpus} \\
         -x map-ont \\
         -a \\
         -Y \\
+        -y \\
         --MD \\
         ${index} \\
         ${fastq} > alignment.sam

@@ -144,9 +144,13 @@ process SAMTOOLS_CONVERT_BAM_TO_FASTQ {
     """
     #!/bin/bash
 
-    set -euo pipefail    
+    set -euo pipefail
     name=\$(basename ${unal_bam} .bam)
-    samtools fastq -@ ${task.cpus} ${unal_bam} | gzip > \$name.fastq.gz
+    # -T MM,ML,MN carries dorado's methylation-call tags through as fastq
+    # comments; minimap2 -y (see MINIMAP2_ALIGN) then copies them back onto
+    # the aligned reads. Without this here, they're gone before minimap2
+    # ever sees the reads, regardless of that flag.
+    samtools fastq -@ ${task.cpus} -T MM,ML,MN ${unal_bam} | gzip > \$name.fastq.gz
 
     """
 }
