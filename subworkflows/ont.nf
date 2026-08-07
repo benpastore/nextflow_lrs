@@ -315,3 +315,17 @@ workflow consolidate_variants {
     emit :
         consolidated_ch = CONSOLIDATE_VARIANTS.out.consolidated_ch
 }
+
+include { ALPHAGENOME } from '../modules/alphagenome/main.nf'
+workflow alphagenome {
+
+    take :
+        data
+        genome
+
+    main :
+        ALPHAGENOME( data, genome )
+
+    emit :
+        alphagenome_ch = ALPHAGENOME.out.alphagenome_ch
+}

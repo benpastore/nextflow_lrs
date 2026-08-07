@@ -71,6 +71,7 @@ include { hapdiff } from '../../subworkflows/ont.nf'
 include { genome_stats } from '../../subworkflows/ont.nf'
 include { chrom_coverage } from '../../subworkflows/ont.nf'
 include { consolidate_variants } from '../../subworkflows/ont.nf'
+include { alphagenome } from '../../subworkflows/ont.nf'
 
 // to add 
 include { DORADO_TRIM } from '../../modules/dorado/main.nf'
@@ -285,8 +286,8 @@ workflow {
 
         // aggregate read/base counts and assembled genome size for QC
         genome_stats( genome_asm_ch )
-
-        // map the asmbley to the reference
+        
+        // map the assembly to the reference
         minimap2_map_asm_to_ref( reference_index, genome_asm_ch)
 
         // per-chromosome average coverage of the assembly-vs-reference alignment
@@ -376,6 +377,17 @@ workflow {
             }
 
         consolidate_variants( consolidate_input_ch )
+
+        ////////////////// ALPHAGENOME VARIANT-EFFECT ANNOTATION /////////////////////
+        // scaffold only -- disabled by default until bin/run_alphagenome.py's
+        // TODOs are filled in against your local weights directory
+        if (params.run_alphagenome) {
+            if (!params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
+
+            alphagenome_input_ch = consolidate_variants.out.consolidated_ch
+
+            alphagenome( alphagenome_input_ch, samtools_fai_index )
+        }
 
     }
 

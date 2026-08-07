@@ -1,0 +1,4 @@
+- pod5.> bam
+- deconvolute sma region 
+- polish alignments (hero??)
+- tracking haplotype family structure 
