@@ -11,15 +11,84 @@ pastore.28@osu.edu
 
 def helpMessage() {
     log.info"""
+    ========================================================================================
+                            haplotype_aware long-read sequencing pipeline
+    ========================================================================================
     Usage:
     The typical command for running the pipeline is as follows:
 
-    nextflow main.nf -profile cluster --design design.csv 
+        nextflow main.nf -profile cluster --design design.csv --genome ref.fa --results results/
+
+    or, starting from raw pod5 instead of an already-basecalled bam/fastq:
+
+        nextflow main.nf -profile cluster --pod5_design pod5_design.csv --genome ref.fa --results results/
 
     Mandatory arguments:
-    --design [file]                     Comma-separated file containing information about the samples in the experiment (see docs/usage.md) (Default: './design.csv')
-    --results [file]                    Path to results directory
-    -profile [str]                      Configuration profile to use. Can use local / cluster
+    --results [dir]                     Path to results directory. All per-tool outputs are published under this.
+    --genome [file]                     Reference genome fasta (T2T-CHM13 by default -- see nextflow.config).
+    -profile [str]                      Configuration profile to use. Can use local / cluster.
+
+    One of the following two is required to specify sample input:
+    --design [file]                     Tab-separated file with columns SAMPLE, ONT, ONT_UNAL_BAM -- one row per
+                                         sample (already-basecalled fastq + unaligned bam). Multiple rows per
+                                         sample are merged (multi-lane/multi-run support).
+    --pod5_design [file]                Alternative entry point: comma-separated csv (header: sample,pod5) mapping
+                                         each sampleID to a directory of pod5 files. The pipeline basecalls with
+                                         dorado (see --dorado_basecall_model) instead of reading --design.
+                                         Mutually exclusive with --design -- if both are set, --pod5_design wins.
+
+    Basecalling / trimming:
+    --dorado_basecall_model [str]       dorado basecaller model string, used only with --pod5_design.
+                                         (default: 'sup,5mCG_5hmCG' -- the 5mCG_5hmCG tag enables methylation
+                                         calling; see the methylation section below)
+    --default_dorado_seq_kit [str]      Sequencing kit passed to dorado trim/basecaller (default: 'SQK-LSK114')
+    --dorado_trim [bool]                Run dorado trim before downstream processing (default: true)
+    --dorado [bool]                     Run dorado polish during assembly (default: true)
+
+    Assembly / alignment:
+    --assemble_genome [bool]            Run the hifiasm assembly branch (dipcall/hapdiff/etc.) (default: true)
+    --alignment_based_variant_calling [bool]
+                                         Run the minimap2/clair3/longphase alignment branch (default: true)
+
+    Hybrid error correction (HERO -- fmlrc2-precorrected + HERO OLC correction using matched Illumina reads):
+    --illumina_design [file]            Comma-separated csv (header: sample,r1,r2) mapping sampleIDs to Illumina
+                                         paired-end fastqs. Only samples listed here get HERO-corrected; every
+                                         other sample passes through unchanged. (default: false, disabled)
+    --hero_chunk_size [int]             HERO's -s chunk-size argument (default: 30)
+    --hero_bin [dir]                    Path to HERO.py inside the "hero" container (default: '/opt/HERO/bin')
+
+    Trio / haplotype family structure (hifiasm trio-binned assembly + WhatsHap pedigree phasing):
+    --family_json [file]                JSON mapping each child sampleID to its parents:
+                                         {"child": {"father": "...", "mother": "..."}}. Parents need no
+                                         Illumina data -- they're identified purely by this file and must just be
+                                         ordinary rows in the same --design/--pod5_design as children. (default:
+                                         false, disabled)
+    --run_trio_analysis [bool]          Master on/off switch for all trio-specific behavior. Requires
+                                         --family_json to also be set. Leave false for singular-genome runs.
+                                         (default: false)
+
+    Paraphase (SMA/SMN1-SMN2 and other segmental-duplication region reconstruction):
+    --paraphase_genome_build [str]      Reference build passed to paraphase's --genome (default: 'chm13')
+    --paraphase_genes [str]             Comma-separated region names to restrict paraphase to (default: '',
+                                         all regions supported for the chosen build)
+    --paraphase_args [str]              Extra raw args appended to the paraphase command line
+
+    Methylation:
+    Enabled automatically whenever the input bam carries MM/ML tags (dorado's default mod-calling model, or
+    --dorado_basecall_model with a mod-calling tag for --pod5_design runs). modkit pileup runs on the final
+    haplotagged bam, split by haplotype (HP tag), producing per-haplotype bedMethyl under
+    <results>/methylation/modkit. No separate flag needed to turn it on.
+
+    AlphaGenome variant-effect annotation (scaffold only -- see bin/run_alphagenome.py TODOs):
+    --run_alphagenome [bool]            (default: false)
+    --alphagenome_weights [dir]         Required if --run_alphagenome is true
+    --alphagenome_args [str]            Extra raw args appended to the alphagenome command line
+
+    Misc:
+    --publish_mode [str]                Nextflow publishDir mode used by most processes (default: 'copy')
+    --outprefix [str]                   Output prefix (default: 'ONT_ANALYSIS' if unset)
+    --debug [bool]                      Verbose logging / channel .view() calls (default: true)
+    --help                              Show this message
     """.stripIndent()
 }
 
@@ -221,12 +290,20 @@ workflow {
     // to also unset/remove family_json. When off (or family_json unset),
     // trio_family is never called and every child just takes the regular
     // non-trio assembly path below.
+    //
+    // Parents have no Illumina data -- they're just ordinary rows in the
+    // same ONT design.csv/pod5_design as children, identified purely via
+    // family_json. trio_family splits them out into non_parent_ont_ch so
+    // they never enter assembly/alignment/phasing/paraphase/modkit below as
+    // full samples; only ont_ch_corrected gets swapped, everything
+    // downstream of it is unchanged.
     run_trio = params.run_trio_analysis && params.family_json
     if (run_trio) {
         // computed once, reused at both the assembly gate below and the
         // phasing gate further down -- avoids re-parsing family_json or
-        // re-running yak/deepvariant for the same parents twice
-        trio_family( params.family_json, params.illumina_design )
+        // re-running yak/clair3 for the same parents twice
+        trio_family( params.family_json, ont_ch_corrected, reference_index, samtools_fai_index )
+        ont_ch_corrected = trio_family.out.non_parent_ont_ch
     }
 
     ////////////////// ASSEMBLY SECTION /////////////////////

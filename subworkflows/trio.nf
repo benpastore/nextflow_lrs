@@ -1,53 +1,51 @@
 nextflow.enable.dsl=2
 
-include { parse_illumina_reads } from './illumina.nf'
-include { atria } from './illumina.nf'
-include { bwa_align } from './illumina.nf'
-include { filter_bam } from './illumina.nf'
-include { deepvariant } from './illumina.nf'
 include { YAK_COUNT } from '../modules/yak/main.nf'
+include { minimap2 } from './ont.nf'
+include { clair3 } from './ont.nf'
 
-// Trio-aware haplotype-family analysis. Children with an entry in the
-// family JSON *and* both parents present in the shared Illumina design
-// (illumina_design -- the same csv hero_correction reads) get:
-//   - a resolved (child, paternal_yak, maternal_yak) row for hifiasm
-//     trio-binning at the assembly step
-//   - a resolved (child, father, mother, father_vcf, mother_vcf) row for
-//     WhatsHap pedigree phasing at the alignment/phasing step
-// Parents are never run through the pipeline as full samples -- they only
-// need enough to produce a yak db (raw Illumina reads) and a genotype VCF
-// (the existing, previously-uncalled atria -> bwa_align -> filter_bam ->
-// deepvariant chain). Both downstream consumers (assembly + phasing) reuse
-// this single parse/yak/vcf computation rather than repeating it.
+// Trio-aware haplotype-family analysis. Parents have no Illumina data --
+// they're sequenced on ONT the same as children, just listed as ordinary
+// rows in the same design.csv/pod5_design. Since they're never meant to be
+// run through the pipeline as full samples (no assembly, SV calling,
+// phasing, paraphase, or modkit), this subworkflow splits them out of the
+// shared ont_ch as soon as they're identifiable (family_json), gives them
+// just enough processing to be useful for trio analysis --
+//   - yak k-mer database (straight from their own ONT reads) for hifiasm
+//     trio-binning
+//   - minimap2 + clair3 genotype-only VCF (the pipeline's own ONT
+//     small-variant caller, reused as-is) for WhatsHap pedigree phasing
+// -- and hands back non_parent_ont_ch for main.nf to use in place of the
+// full ont_ch for every other section of the pipeline.
 workflow trio_family {
 
     take:
-        family_json      // path to JSON: {"child": {"father": "...", "mother": "..."}}, or false/"" to disable
-        illumina_design  // shared Illumina design csv (sample,r1,r2)
+        family_json  // path to JSON: {"child": {"father": "...", "mother": "..."}}, or false/"" to disable
+        ont_ch        // tuple(sampleID, unal_bam, fastq) -- every sample (children + parents), post-HERO
+        reference_index    // minimap2 .mmi index
+        samtools_fai_index // tuple(ref, ref_fai)
 
     main:
-        parse_illumina_reads( illumina_design )
-        illumina_reads = parse_illumina_reads.out.reads
-
         def families = family_json ? new groovy.json.JsonSlurper().parse(file(family_json, checkIfExists: true)) : [:]
         trio_rows = families.collect { child, parents -> tuple(child, parents.father, parents.mother) }
         trio_ch = Channel.from(trio_rows)
 
         parent_ids = (trio_rows.collect { it[1] } + trio_rows.collect { it[2] }).unique()
 
-        parent_reads_ch = illumina_reads.filter { sid, r1, r2 -> sid in parent_ids }
+        parent_ont_ch = ont_ch.filter { sampleID, bam, fastq -> sampleID in parent_ids }
+        non_parent_ont_ch = ont_ch.filter { sampleID, bam, fastq -> !(sampleID in parent_ids) }
 
         // paternal/maternal k-mer databases, for hifiasm trio-binning
-        YAK_COUNT( parent_reads_ch )
+        YAK_COUNT( parent_ont_ch.map { sampleID, bam, fastq -> tuple(sampleID, [fastq]) } )
         yak_ch = YAK_COUNT.out.yak_ch
 
-        // genotype-only short-read VCF, for whatshap pedigree phasing
-        parent_atria_input = parent_reads_ch.map { sid, r1, r2 -> tuple(sid, [r1, r2]) }
-        atria( parent_atria_input )
-        bwa_align( atria.out.fqs )
-        filter_bam( bwa_align.out.bams )
-        deepvariant( filter_bam.out.filter_bam_bai )
-        parent_vcf_ch = deepvariant.out.vcfs.map { sid, vcf, tbi -> tuple(sid, vcf) }
+        // genotype-only VCF, for whatshap pedigree phasing -- same
+        // minimap2/clair3 the rest of the pipeline uses, just run on
+        // parents only and not carried any further (no sniffles/longphase/
+        // straglr/spectre/paraphase/modkit for parents)
+        minimap2( reference_index, parent_ont_ch.map { sampleID, bam, fastq -> tuple(sampleID, fastq) } )
+        clair3( samtools_fai_index, minimap2.out.bams )
+        parent_vcf_ch = clair3.out.clair3_ch.map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
 
         // resolve full trios against yak (join keyed on father, then remapped and
         // joined again keyed on mother -- Nextflow's join() only keys on one field
@@ -68,6 +66,7 @@ workflow trio_family {
             .map { mother, child, father, father_vcf, mother_vcf -> tuple(child, father, mother, father_vcf, mother_vcf) }
 
     emit:
-        trio_assembly = trio_yak_ch      // tuple(child, paternal_yak, maternal_yak)
-        trio_phasing  = trio_phasing_ch  // tuple(child, father, mother, father_vcf, mother_vcf)
+        trio_assembly     = trio_yak_ch        // tuple(child, paternal_yak, maternal_yak)
+        trio_phasing       = trio_phasing_ch    // tuple(child, father, mother, father_vcf, mother_vcf)
+        non_parent_ont_ch = non_parent_ont_ch  // tuple(sampleID, unal_bam, fastq) -- everyone except parents
 }
