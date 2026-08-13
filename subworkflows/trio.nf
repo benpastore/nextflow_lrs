@@ -67,6 +67,6 @@ workflow trio_family {
 
     emit:
         trio_assembly     = trio_yak_ch        // tuple(child, paternal_yak, maternal_yak)
-        trio_phasing       = trio_phasing_ch    // tuple(child, father, mother, father_vcf, mother_vcf)
+        trio_phasing      = trio_phasing_ch    // tuple(child, father, mother, father_vcf, mother_vcf)
         non_parent_ont_ch = non_parent_ont_ch  // tuple(sampleID, unal_bam, fastq) -- everyone except parents
 }
