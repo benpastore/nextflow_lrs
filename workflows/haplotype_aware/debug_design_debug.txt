@@ -1,0 +1,5 @@
+SAMPLE	ONT	ONT_UNAL_BAM
+family_a	/fs/ess/PAS0631/Family_A/110_parent/PBC71895_pass_12883417_477c7918_0.fastq.gz	/fs/ess/PAS0631/Family_A/110_parent/PBC71895_pass_12883417_477c7918_0.bam
+family_a	/fs/ess/PAS0631/Family_A/110_parent/PBE11656_pass_16b6e45b_21a51336_0.fastq.gz	/fs/ess/PAS0631/Family_A/110_parent/PBE11656_pass_16b6e45b_21a51336_0.bam
+family_a	/fs/ess/PAS0631/Family_A/110_parent/PBE12403_pass_a2cdc5d6_16626130_0.fastq.gz	/fs/ess/PAS0631/Family_A/110_parent/PBE12403_pass_a2cdc5d6_16626130_0.bam
+family_a	/fs/ess/PAS0631/Family_A/110_parent/PBE12558_pass_40cf0a81_7f322ecc_0.fastq.gz	/fs/ess/PAS0631/Family_A/110_parent/PBE12558_pass_40cf0a81_7f322ecc_0.bam
