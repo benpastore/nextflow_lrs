@@ -6,6 +6,7 @@ include { FMLRC2_CORRECT } from '../modules/fmlrc2/main.nf'
 include { HERO } from '../modules/hero/main.nf'
 include { SAMTOOLS_FASTQ_TO_BAM } from '../modules/samtools/main.nf'
 include { parse_illumina_reads } from './illumina.nf'
+include { atria } from './illumina.nf'
 
 // Hybrid error correction for samples that have matched Illumina reads;
 // samples without a matching entry in the Illumina design pass through
@@ -21,7 +22,11 @@ workflow hero_correction {
 
     main:
         parse_illumina_reads( illumina_design )
-        illumina_reads = parse_illumina_reads.out.reads
+
+        // adapter-trim unconditionally -- input fastqs aren't guaranteed to
+        // already be trimmed, and re-trimming already-clean reads is a no-op
+        atria( parse_illumina_reads.out.reads.map { sampleID, r1, r2 -> tuple(sampleID, [r1, r2]) } )
+        illumina_reads = atria.out.fqs.map { sampleID, fqs -> tuple(sampleID, fqs[0], fqs[1]) }
 
         gated = ont_ch
             .join(illumina_reads, remainder: true)
@@ -32,7 +37,12 @@ workflow hero_correction {
 
         to_correct = gated.has_illumina
         skip_correction = gated.no_illumina
-            .map { sampleID, bam, fastq, r1, r2 -> tuple(sampleID, bam, fastq) }
+            // join(remainder:true) pads an unmatched item with a single null,
+            // not one null per missing right-hand field -- so this tuple is
+            // (sampleID, bam, fastq, null), not the 5-element shape matched
+            // items have. Index instead of destructuring by name so it works
+            // for both.
+            .map { row -> tuple(row[0], row[1], row[2]) }
 
         ROPEBWT2( to_correct.map { sampleID, bam, fastq, r1, r2 -> tuple(sampleID, r1, r2) } )
 
