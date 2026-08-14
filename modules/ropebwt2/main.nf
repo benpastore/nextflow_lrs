@@ -14,14 +14,13 @@ process ROPEBWT2 {
     #!/bin/bash
     set -euo pipefail
 
-    # -S caps sort's own memory well below the SLURM --mem allocation (see
-    # nextflow.config, label 'ropebwt2') -- GNU sort otherwise grabs RAM
-    # unboundedly and ignores the cgroup limit, which is what was OOM-killing
-    # this step; -T . spills to the task work dir instead of a possibly-small
-    # shared /tmp once past that cap.
+    # this container's `sort` is BusyBox, not GNU coreutils -- no -S/-T/
+    # --parallel, and no external-merge spill-to-disk at all, so it holds
+    # the whole input in memory. The only real memory lever is the SLURM
+    # --mem allocation (see nextflow.config, label 'ropebwt2').
     zcat -f ${r1} ${r2} \\
         | awk 'NR % 4 == 2' \\
-        | sort -S 48G --parallel=${task.cpus} -T . \\
+        | sort \\
         | tr NT TN \\
         | ropebwt2 -LR > ${sampleID}.ropebwt2.txt
     """
