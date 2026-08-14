@@ -1,5 +1,6 @@
 nextflow.enable.dsl=2
 
+include { SORT_READS_FOR_ROPEBWT2 } from '../modules/ropebwt2/main.nf'
 include { ROPEBWT2 } from '../modules/ropebwt2/main.nf'
 include { FMLRC2_CONVERT } from '../modules/fmlrc2/main.nf'
 include { FMLRC2_CORRECT } from '../modules/fmlrc2/main.nf'
@@ -44,7 +45,8 @@ workflow hero_correction {
             // for both.
             .map { row -> tuple(row[0], row[1], row[2]) }
 
-        ROPEBWT2( to_correct.map { sampleID, bam, fastq, r1, r2 -> tuple(sampleID, r1, r2) } )
+        SORT_READS_FOR_ROPEBWT2( to_correct.map { sampleID, bam, fastq, r1, r2 -> tuple(sampleID, r1, r2) } )
+        ROPEBWT2( SORT_READS_FOR_ROPEBWT2.out.sorted_ch )
 
         FMLRC2_CONVERT( ROPEBWT2.out.ropebwt2_ch )
 
