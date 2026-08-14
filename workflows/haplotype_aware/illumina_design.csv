@@ -1,3 +1,3 @@
 sample,R1,R2
-A_severe112,/fs/scratch/PAS0631/recessive_modifier_fastq/recessive_modifier_combined_fastq/s_112_1.fq.gz,/fs/scratch/PAS0631/recessive_modifier_fastq/recessive_modifier_combined_fastq/s_112_2.fq.gz
-A_mild113,/fs/scratch/PAS0631/recessive_modifier_fastq/recessive_modifier_combined_fastq/s_113_1.fq.gz,/fs/scratch/PAS0631/recessive_modifier_fastq/recessive_modifier_combined_fastq/s_113_2.fq.gz
+A_severe112,/fs/scratch/PAS0631/family_a_illumina/s_112_1.atria.fq.gz,/fs/scratch/PAS0631/family_a_illumina/s_112_2.atria.fq.gz
+A_mild113,/fs/scratch/PAS0631/family_a_illumina/s_113_1.atria.fq.gz,/fs/scratch/PAS0631/family_a_illumina/s_113_2.atria.fq.gz
