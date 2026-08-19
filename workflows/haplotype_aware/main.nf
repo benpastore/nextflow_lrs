@@ -50,12 +50,16 @@ def helpMessage() {
     --alignment_based_variant_calling [bool]
                                          Run the minimap2/clair3/longphase alignment branch (default: true)
 
-    Hybrid error correction (HERO -- fmlrc2-precorrected + HERO OLC correction using matched Illumina reads):
-    --illumina_design [file]            Comma-separated csv (header: sample,r1,r2) mapping sampleIDs to Illumina
-                                         paired-end fastqs. Only samples listed here get HERO-corrected; every
-                                         other sample passes through unchanged. (default: false, disabled)
-    --hero_chunk_size [int]             HERO's -s chunk-size argument (default: 30)
-    --hero_bin [dir]                    Path to HERO.py inside the "hero" container (default: '/opt/HERO/bin')
+    Error correction (HERRO -- GPU deep-learning ONT self-correction, https://github.com/lbcb-sci/herro):
+    --herro_model [file]                Path to HERRO model weights, resolved inside the herro_inference
+                                         container. Defaults to the R10.4.1 model baked into that image
+                                         at build time (see docker/herro/Dockerfile.inference) -- no
+                                         separate download needed. Runs on every sample, no per-sample
+                                         gating (herro has no notion of matched Illumina data).
+    --herro_gpu_ids [str]                GPU device IDs passed to `herro inference -d` (default: '0')
+    --herro_batch_size [int]            `herro inference -b` (default: 64 -- 64 for 40GB VRAM, 128 for 80GB)
+    --herro_preprocess_parts [int]      Chunk count for herro's preprocess.sh, bounds memory on large read
+                                         sets (default: 4)
 
     Trio / haplotype family structure (hifiasm trio-binned assembly + WhatsHap pedigree phasing):
     --family_json [file]                JSON mapping each child sampleID to its parents:
@@ -145,7 +149,7 @@ include { chrom_coverage } from '../../subworkflows/ont.nf'
 include { consolidate_variants } from '../../subworkflows/ont.nf'
 include { alphagenome } from '../../subworkflows/ont.nf'
 
-include { hero_correction } from '../../subworkflows/hero.nf'
+include { herro_correction } from '../../subworkflows/herro.nf'
 include { trio_family } from '../../subworkflows/trio.nf'
 include { WHATSHAP_PHASE_TRIO } from '../../modules/whatshap/main.nf'
 include { pod5_basecall } from '../../subworkflows/pod5.nf'
@@ -273,15 +277,15 @@ workflow {
     //ont_unal_bam = DORADO_TRIM.out.dorado_trim_output_ch
     ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq
 
-    /////////////////// prelim QC on nanopore reads (always on raw reads, before HERO correction)
+    /////////////////// prelim QC on nanopore reads (always on raw reads, before HERRO correction)
     NANOPLOT_RAW( ont_ch )
 
-    ////////////////// HYBRID ERROR CORRECTION (HERO) /////////////////////
-    // samples with a matching entry in params.illumina_design get fmlrc2-precorrected
-    // + HERO-corrected reads; samples without matched Illumina data pass through
-    // unchanged. Feeds assembly and alignment below.
-    hero_correction( ont_ch, params.illumina_design )
-    ont_ch_corrected = hero_correction.out.ont_ch
+    ////////////////// GPU DEEP-LEARNING ERROR CORRECTION (HERRO) /////////////////////
+    // every sample gets herro-corrected (no per-sample gating -- herro is ONT-only
+    // self-correction, unlike the old Illumina-hybrid HERO tool). Feeds assembly and
+    // alignment below.
+    herro_correction( ont_ch )
+    ont_ch_corrected = herro_correction.out.ont_ch
 
     ////////////////// TRIO / HAPLOTYPE FAMILY STRUCTURE /////////////////////
     // params.run_trio_analysis is the single on/off switch for all

@@ -1,0 +1,61 @@
+# GPU inference image for HERRO_INFERENCE. Reproduces lbcb-sci/herro's own
+# Dockerfile (https://github.com/lbcb-sci/herro/blob/main/Dockerfile) build
+# exactly -- minimap2 + herro built from source against libtorch/CUDA 12.4 --
+# with one addition: the R10.4.1 model weights are fetched at build time and
+# baked into the image, so params.herro_model can just point at a path
+# inside the container instead of a separate file on the cluster filesystem.
+#
+# Build and push:
+#   docker build -t benpasto/herro-inference:latest -f docker/herro/Dockerfile.inference docker/herro/
+#   docker push benpasto/herro-inference:latest
+
+# Stage: devel
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 as devel
+
+RUN apt-get update \
+    && apt-get install -y wget git unzip curl build-essential zlib1g-dev zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build minimap2
+RUN git clone https://github.com/lh3/minimap2.git && cd minimap2 && make \
+    && cd /
+
+# Rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && export PATH="/root/.cargo/bin:${PATH}"
+
+# libtorch
+RUN wget -q -O libtorch.zip https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcu124.zip \
+    && unzip -q libtorch.zip && rm libtorch.zip \
+    && export LIBTORCH=/libtorch \
+    && export LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH
+
+# Build herro
+RUN git clone https://github.com/lbcb-sci/herro.git herro
+
+WORKDIR /herro
+RUN export LIBTORCH=/libtorch \
+    && export LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH \
+    && export PATH="/root/.cargo/bin:${PATH}" \
+    && RUSTFLAGS="-Ctarget-cpu=native" cargo build -q --release
+
+# Stage: final
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 as final
+
+COPY --from=devel /minimap2/minimap2 /bin/minimap2
+COPY --from=devel /herro/target/release/herro /bin/herro
+COPY --from=devel /libtorch /libs/
+
+RUN apt-get update \
+    && apt-get install -y wget libgomp1 zlib1g-dev zstd \
+    && rm -rf /var/lib/apt/lists/* \
+    && wget -q -O /opt/model_R10_v0.1.pt "https://zenodo.org/records/12683277/files/model_v0.1.pt?download=1" \
+    && apt-get purge -y wget \
+    && apt-get autoremove -y
+
+ENV LIBTORCH=/libs
+ENV LD_LIBRARY_PATH=${LIBTORCH}/lib:$LD_LIBRARY_PATH
+
+LABEL Author="Dominik Stanojevic"
+LABEL Version="v0.1.1"
+LABEL Name="herro"

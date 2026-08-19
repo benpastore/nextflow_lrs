@@ -44,7 +44,7 @@ as fastq comments for `MINIMAP2_ALIGN -y` to restore later).
   — this becomes the pipeline's canonical `ont_ch` shape: `(sampleID, unal_bam, fastq)`
 
 ### `NANOPLOT_RAW` — `modules/nanoplot/main.nf`
-Raw-read QC (`NanoPlot`) on the pre-HERO fastq. Report-only, no downstream consumers.
+Raw-read QC (`NanoPlot`) on the pre-HERRO fastq. Report-only, no downstream consumers.
 - **in**: `tuple val(sampleID), val(bam), val(fastq)`
 - **out**: `path("*")` — NanoPlot report directory
 
@@ -61,52 +61,39 @@ Builds (or reuses, if already cached at `index_dir`) the minimap2 `.mmi` index f
 
 ---
 
-## 2. Hybrid error correction (HERO) — `subworkflows/hero.nf`, gated by `--illumina_design`
+## 2. Error correction (HERRO) — `subworkflows/herro.nf`
 
-### `ATRIA` — `modules/atria/main.nf`
-Adapter/quality-trims the Illumina R1/R2 reads before they feed `ROPEBWT2` (added so reads that
-weren't pre-trimmed upstream still get cleaned; a no-op on reads that already were).
-- **in**: `tuple val(sampleID), val(fastq)` — `fastq` is `[r1, r2]` for paired-end
-- **out**: `tuple val(sampleID), path("*.{fq,fastq}.gz")` → `fq_ch`
+GPU deep-learning ONT self-correction ([lbcb-sci/herro](https://github.com/lbcb-sci/herro)) — **not**
+the same tool as the earlier "HERO" (`kangxiongbin/HERO`) hybrid Illumina+ONT corrector this replaced.
+herro corrects ONT reads via all-vs-all self-alignment + neural-net inference; it never touches
+Illumina data, so unlike the old path there's no per-sample gating — every sample in `ont_ch` runs
+through the same three steps.
 
-### `SORT_READS_FOR_ROPEBWT2` — `modules/ropebwt2/main.nf`
-Extracts sequence lines from trimmed R1+R2, lexically sorts them, and complements N/T→T/N — the
-sort order `ropebwt2` expects for BWT construction. Runs on a general-purpose container with real
-GNU coreutils (the `ropebwt2` biocontainer itself only ships BusyBox, whose `sort` has no memory cap
-and segfaults on WGS-scale read counts).
-- **in**: `tuple val(sampleID), val(r1), val(r2)`
-- **out**: `tuple val(sampleID), path("${sampleID}.sorted_seqs.txt")` → `sorted_ch`
+### `HERRO_PREPROCESS` — `modules/herro/main.nf`
+Adapter-trims/splits/length-filters the ONT reads (`herro`'s `scripts/preprocess.sh`, wrapping
+porechop + duplex_tools + seqkit). `--herro_preprocess_parts` chunks the job to bound memory on large
+read sets.
+- **in**: `tuple val(sampleID), val(unal_bam), val(fastq)`
+- **out**: `tuple val(sampleID), path("${sampleID}.herro_preprocessed.fastq.gz")` → `preprocessed_ch`
 
-### `ROPEBWT2` — `modules/ropebwt2/main.nf`
-Builds the FM-index/BWT (`ropebwt2 -LR`) over the sorted reads.
-- **in**: `tuple val(sampleID), path(sorted_seqs)`
-- **out**: `tuple val(sampleID), path("*.ropebwt2.txt")` → `ropebwt2_ch`
+### `HERRO_ALIGN_BATCHES` — `modules/herro/main.nf`
+All-vs-all self-alignment of the preprocessed reads (`minimap2`) via herro's
+`scripts/create_batched_alignments.sh`, batched for the GPU inference step.
+- **in**: `tuple val(sampleID), path(preprocessed_fastq)`
+- **out**: `tuple val(sampleID), path(preprocessed_fastq), path("${sampleID}_alignment_batches")` → `batches_ch`
 
-### `FMLRC2_CONVERT` — `modules/fmlrc2/main.nf`
-Converts the ropebwt2 BWT text into fmlrc2's binary `.msbwt.npy` index.
-- **in**: `tuple val(sampleID), val(ropebwt2_txt)`
-- **out**: `tuple val(sampleID), path("*.msbwt.npy")` → `fmlrc2_convert_ch`
-
-### `FMLRC2_CORRECT` — `modules/fmlrc2/main.nf`
-Corrects the long (ONT) reads against the short-read BWT index.
-- **in**: `tuple val(sampleID), val(msbwt), val(fastq)` — `fastq` is the long-read fastq
-- **out**: `tuple val(sampleID), path("*.fmlrc2.corrected.fasta")` → `fmlrc2_correct_ch`
-
-### `HERO` — `modules/hero/main.nf`
-OLC-based consensus correction (`HERO.py`) combining the fmlrc2-precorrected long reads with the raw
-Illumina reads. Output is FASTA re-consensus, gzipped under a `.fastq.gz` name so downstream
-extension-based basename logic keeps working (hifiasm/minimap2 auto-detect FASTA vs FASTQ by content).
-- **in**: `tuple val(sampleID), val(fmlrc2_fasta), val(r1), val(r2)`
-- **out**: `tuple val(sampleID), path("*.hero.corrected.fastq.gz")` → `hero_ch`
+### `HERRO_INFERENCE` — `modules/herro/main.nf`
+Neural-net correction (`herro inference`, requires GPU + `--herro_model` weights). Output is FASTA
+re-consensus, gzipped under a `.fastq.gz` name so downstream extension-based basename logic keeps
+working (hifiasm/minimap2 auto-detect FASTA vs FASTQ by content, not extension).
+- **in**: `tuple val(sampleID), path(preprocessed_fastq), path(alignment_batches)`
+- **out**: `tuple val(sampleID), path("*.herro.corrected.fastq.gz")` → `herro_ch`
 
 ### `SAMTOOLS_FASTQ_TO_BAM` — `modules/samtools/main.nf`
-Reimports the HERO-corrected fastq into an unaligned bam, reusing the original `@RG` line (needed
+Reimports the herro-corrected fastq into an unaligned bam, reusing the original `@RG` line (needed
 later for `dorado polish`'s model auto-resolution).
 - **in**: `tuple val(sampleID), path(fastq), path(orig_bam)`
 - **out**: `tuple val(sampleID), path("*.unal.bam"), path(fastq)` → `fastq_to_bam_ch`
-
-*Samples with no matching `--illumina_design` row skip straight from `ont_ch` to this stage's output
-unchanged (see `hero_correction`'s `skip_correction` branch).*
 
 ---
 
@@ -274,6 +261,8 @@ Variant-effect annotation of the master VCF via `bin/run_alphagenome.py`.
 These are `include`d in `main.nf` (via `subworkflows/illumina.nf`) but never actually called in the
 workflow body — present in case a future Illumina-only branch is wired in, not part of any current run:
 
+- `ATRIA` — `modules/atria/main.nf` (lost its only caller when `hero_correction` was replaced by
+  `herro_correction`, which doesn't touch Illumina reads at all)
 - `BWA_INDEX` / `BWA_MEM` — `modules/bwa/main.nf`
 - `FILTER_BAM` / `INDEX_BAM` — `modules/samtools/main.nf` (via `illumina.nf`'s `filter_bam` workflow)
 - `DEEPVARIANT_CALL_VARIANTS` / `SPLIT_DV_VCF` — `modules/deepvariant/main.nf`
