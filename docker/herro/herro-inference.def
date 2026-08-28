@@ -20,6 +20,14 @@ Bootstrap: docker
 From: nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 %post
+    # fakeroot builds from a Docker base image sometimes leave /tmp with
+    # ownership fakeroot's mapped root can't write into, which breaks
+    # apt-key's temp-file creation (surfaces as "Couldn't create temporary
+    # file /tmp/apt.conf.XXXXXX" on every apt repo, not just NVIDIA's) --
+    # recreating it up front fixes that.
+    rm -rf /tmp
+    mkdir -m 1777 /tmp
+
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y wget git unzip curl build-essential zlib1g-dev zstd libgomp1
