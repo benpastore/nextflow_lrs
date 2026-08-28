@@ -70,15 +70,19 @@ process MINIMAP2_ALIGN {
     output : 
         tuple val(sampleID), path("*.sorted.bam"), path("*.sorted.bam.bai"), emit : bam_ch
 
-    script : 
+    script :
     """
     #!/bin/bash
-        
+    set -euo pipefail
+
     name=\$(basename ${fastq} .fastq.gz)
 
     # -y copies the MM/ML methylation tags (carried as fastq comments by
     # SAMTOOLS_CONVERT_BAM_TO_FASTQ's -T flag) back onto the aligned reads --
     # without it they're silently dropped here even if present in the fastq.
+    # Piped straight into sort rather than written to an intermediate SAM
+    # file -- with --MD on a full WGS alignment the uncompressed SAM can run
+    # to 100s of GB, and a full/quota-exceeded disk truncates it silently.
     minimap2 \\
         -t ${task.cpus} \\
         -x map-ont \\
@@ -87,9 +91,8 @@ process MINIMAP2_ALIGN {
         -y \\
         --MD \\
         ${index} \\
-        ${fastq} > alignment.sam
-
-    samtools sort -@ ${task.cpus} -o \${name}.minimap2.sorted.bam alignment.sam
+        ${fastq} \\
+      | samtools sort -@ ${task.cpus} -o \${name}.minimap2.sorted.bam -
 
     samtools index -@ ${task.cpus} \${name}.minimap2.sorted.bam
 
