@@ -1,14 +1,15 @@
-# GPU inference image for HERRO_INFERENCE, built natively on OSC with
-# Apptainer (no Docker needed). Apptainer .def has no multi-stage build, so
-# this flattens Dockerfile.inference into one stage and deletes build
-# artifacts afterward to keep the final image reasonably small.
+# GPU inference image for HERRO_INFERENCE, built with Apptainer on OSC (no
+# Docker needed). Apptainer .def has no multi-stage build, so this flattens
+# Dockerfile.inference into one stage and deletes build artifacts afterward
+# to keep the final image reasonably small.
 #
-# Build ON A GPU NODE (matters: RUSTFLAGS=-Ctarget-cpu=native below bakes in
-# CPU-specific instructions -- build on hardware that matches, or is the
-# same generation as, the nodes this will actually run on):
+# No GPU needed to build -- compiling against the CUDA toolkit doesn't
+# require a physical GPU, only running herro does. RUSTFLAGS below targets
+# a portable x86-64-v2 baseline rather than -Ctarget-cpu=native, since OSC
+# has multiple GPU node types and there's no way to know which one a given
+# job lands on -- native would risk an illegal-instruction crash on any
+# node whose CPU doesn't match the build machine.
 #
-#   srun --account=PAS0631 --partition=nextgen --cluster=ascend \
-#        --gpus-per-node=1 --mem=64gb --time=02:00:00 --pty bash
 #   cd docker/herro
 #   apptainer build --fakeroot herro-inference.sif herro-inference.def
 #
@@ -36,15 +37,15 @@ From: nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
     wget -q -O /libtorch.zip "https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcu124.zip"
     cd / && unzip -q libtorch.zip && rm libtorch.zip
 
-    # herro, built against libtorch/CUDA -- native is safe here because
-    # this .def is meant to be built on the same GPU node generation it
-    # will run on (see build instructions above)
+    # herro, built against libtorch/CUDA -- x86-64-v2 is a portable
+    # baseline (safe on any CPU from roughly the last 15 years) since we
+    # don't know which OSC GPU node type this will run on
     git clone https://github.com/lbcb-sci/herro.git /herro
     cd /herro
     export LIBTORCH=/libtorch
     export LD_LIBRARY_PATH=${LIBTORCH}/lib:${LD_LIBRARY_PATH}
     export PATH="/root/.cargo/bin:${PATH}"
-    RUSTFLAGS="-Ctarget-cpu=native" cargo build -q --release
+    RUSTFLAGS="-Ctarget-cpu=x86-64-v2" cargo build -q --release
 
     # install to final locations
     cp /minimap2/minimap2 /bin/minimap2
