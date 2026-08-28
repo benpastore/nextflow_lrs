@@ -76,12 +76,14 @@ def helpMessage() {
     --paraphase_args [str]              Extra raw args appended to the paraphase command line
 
     Methylation:
-    Enabled automatically whenever the input bam carries MM/ML tags (dorado's default mod-calling model, or
-    --dorado_basecall_model with a mod-calling tag for --pod5_design runs). Real MM/ML tags only survive on
-    the raw (pre-HERRO) reads, so those are aligned separately (minimap2_methylation) and haplotagged with
-    HP projected over from the herro-corrected/phased bam (methylation_haplotag) before modkit pileup, split
-    by haplotype (HP tag), producing per-haplotype bedMethyl under <results>/methylation/modkit. No separate
-    flag needed to turn it on.
+    --run_methylation [bool]            Default: true. Set false if the input bam/fastq was basecalled
+                                         without mod-calling enabled (no MM/ML tags) -- otherwise this
+                                         spends compute producing empty output. Real MM/ML tags only survive
+                                         on the raw (pre-HERRO) reads, so those are aligned separately
+                                         (minimap2_methylation) and haplotagged with HP projected over from
+                                         the herro-corrected/phased bam (methylation_haplotag) before modkit
+                                         pileup, split by haplotype (HP tag), producing per-haplotype
+                                         bedMethyl under <results>/methylation/modkit.
 
     AlphaGenome variant-effect annotation (scaffold only -- see bin/run_alphagenome.py TODOs):
     --run_alphagenome [bool]            (default: false)
@@ -289,8 +291,13 @@ workflow {
     // assembly/variant calling below. Independent of herro, so it can run
     // in parallel with it. Haplotagged and piped into modkit further down,
     // once herro-corrected phasing (longphase_sv) is available.
-    minimap2_methylation( reference_index, ont_ch.map { sid, unal_bam, fastq -> tuple(sid, fastq) } )
-    methylation_bam_ch = minimap2_methylation.out.bams
+    // Set params.run_methylation = false to skip this entirely -- e.g. if
+    // the input bam/fastq was basecalled without mod-calling enabled, MM/ML
+    // tags don't exist and this would just spend compute on empty output.
+    if (params.run_methylation) {
+        minimap2_methylation( reference_index, ont_ch.map { sid, unal_bam, fastq -> tuple(sid, fastq) } )
+        methylation_bam_ch = minimap2_methylation.out.bams
+    }
 
     ////////////////// GPU DEEP-LEARNING ERROR CORRECTION (HERRO) /////////////////////
     // every sample gets herro-corrected (no per-sample gating -- herro is ONT-only
@@ -446,8 +453,10 @@ workflow {
         // methylation pileup (5mCG/5hmCG) -- real MM/ML tags only exist on the raw-read
         // alignment (methylation_bam_ch), haplotagged here with HP projected over from
         // longphase_sv's herro-corrected phasing (see methylation_haplotag)
-        methylation_haplotag( haplo_ch_v2, methylation_bam_ch )
-        modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
+        if (params.run_methylation) {
+            methylation_haplotag( haplo_ch_v2, methylation_bam_ch )
+            modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
+        }
 
         ////////////////// CONSOLIDATE VARIANTS SECTION /////////////////////
         // master per-sample VCF: alignment-based (clair3 small variants,
