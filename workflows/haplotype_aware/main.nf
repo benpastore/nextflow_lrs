@@ -77,9 +77,11 @@ def helpMessage() {
 
     Methylation:
     Enabled automatically whenever the input bam carries MM/ML tags (dorado's default mod-calling model, or
-    --dorado_basecall_model with a mod-calling tag for --pod5_design runs). modkit pileup runs on the final
-    haplotagged bam, split by haplotype (HP tag), producing per-haplotype bedMethyl under
-    <results>/methylation/modkit. No separate flag needed to turn it on.
+    --dorado_basecall_model with a mod-calling tag for --pod5_design runs). Real MM/ML tags only survive on
+    the raw (pre-HERRO) reads, so those are aligned separately (minimap2_methylation) and haplotagged with
+    HP projected over from the herro-corrected/phased bam (methylation_haplotag) before modkit pileup, split
+    by haplotype (HP tag), producing per-haplotype bedMethyl under <results>/methylation/modkit. No separate
+    flag needed to turn it on.
 
     AlphaGenome variant-effect annotation (scaffold only -- see bin/run_alphagenome.py TODOs):
     --run_alphagenome [bool]            (default: false)
@@ -128,6 +130,7 @@ include { gfatools } from '../../subworkflows/ont.nf'
 include { dorado } from '../../subworkflows/ont.nf'
 
 include { minimap2 } from '../../subworkflows/ont.nf'
+include { minimap2_methylation } from '../../subworkflows/ont.nf'
 include { minimap2_index } from '../../subworkflows/ont.nf'
 include { minimap2_map_asm_to_ref } from '../../subworkflows/ont.nf'
 
@@ -139,6 +142,7 @@ include { sniffles } from '../../subworkflows/ont.nf'
 include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
 include { paraphase } from '../../subworkflows/ont.nf'
+include { methylation_haplotag } from '../../subworkflows/ont.nf'
 include { modkit } from '../../subworkflows/ont.nf'
 include { dipcall } from '../../subworkflows/ont.nf'
 include { hapdiff } from '../../subworkflows/ont.nf'
@@ -278,6 +282,16 @@ workflow {
     /////////////////// prelim QC on nanopore reads (always on raw reads, before HERRO correction)
     NANOPLOT_RAW( ont_ch )
 
+    ////////////////// METHYLATION (raw-read alignment) /////////////////////
+    // real MM/ML methylation tags only survive on the raw (pre-herro) reads
+    // (herro's own output carries none, see MINIMAP2_ALIGN's comment), so
+    // this is aligned separately from the herro-corrected reads used for
+    // assembly/variant calling below. Independent of herro, so it can run
+    // in parallel with it. Haplotagged and piped into modkit further down,
+    // once herro-corrected phasing (longphase_sv) is available.
+    minimap2_methylation( reference_index, ont_ch.map { sid, unal_bam, fastq -> tuple(sid, fastq) } )
+    methylation_bam_ch = minimap2_methylation.out.bams
+
     ////////////////// GPU DEEP-LEARNING ERROR CORRECTION (HERRO) /////////////////////
     // every sample gets herro-corrected (no per-sample gating -- herro is ONT-only
     // self-correction, unlike the old Illumina-hybrid HERO tool). Feeds assembly and
@@ -385,8 +399,8 @@ workflow {
     params.alignment_based_variant_calling = true
     if (params.alignment_based_variant_calling) { 
 
-        // MAP READS TO REFERENCE GENOME
-        //minimap2( reference_index, ont_reads )
+        // MAP READS TO REFERENCE GENOME (herro-corrected, for variant calling --
+        // see minimap2_methylation above for the separate raw-read alignment)
         minimap2(reference_index, ont_ch_corrected.map { sid, unal_bam, fastq -> tuple(sid, fastq) })
         
         // clair3 call variants 
@@ -429,8 +443,11 @@ workflow {
         // paraphase (SMA/SMN1-SMN2 region reconstruction from segmental duplications)
         paraphase( haplo_ch_v2, samtools_fai_index )
 
-        // methylation pileup (5mCG/5hmCG), split by haplotype via longphase_sv's HP tags
-        modkit( haplo_ch_v2, samtools_fai_index )
+        // methylation pileup (5mCG/5hmCG) -- real MM/ML tags only exist on the raw-read
+        // alignment (methylation_bam_ch), haplotagged here with HP projected over from
+        // longphase_sv's herro-corrected phasing (see methylation_haplotag)
+        methylation_haplotag( haplo_ch_v2, methylation_bam_ch )
+        modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
 
         ////////////////// CONSOLIDATE VARIANTS SECTION /////////////////////
         // master per-sample VCF: alignment-based (clair3 small variants,

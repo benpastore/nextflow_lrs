@@ -160,16 +160,31 @@ workflow minimap2_index {
 
 workflow minimap2 {
 
-    take : 
+    take :
         index
         data
 
     main :
 
         MINIMAP2_ALIGN( index, data )
-    
+
     emit :
         bams = MINIMAP2_ALIGN.out.bam_ch
+}
+
+include { MINIMAP2_ALIGN_METHYLATION } from '../modules/minimap2/main.nf'
+workflow minimap2_methylation {
+
+    take :
+        index
+        data
+
+    main :
+
+        MINIMAP2_ALIGN_METHYLATION( index, data )
+
+    emit :
+        bams = MINIMAP2_ALIGN_METHYLATION.out.bam_ch
 }
 
 include { MAP_ASM_TO_REF } from '../modules/minimap2/main.nf'
@@ -303,6 +318,30 @@ workflow paraphase {
 
     emit :
         paraphase = PARAPHASE.out.paraphase_ch
+}
+
+include { TRANSFER_HP_TAGS } from '../modules/modkit/main.nf'
+workflow methylation_haplotag {
+
+    // Joins the herro-corrected/phased bam (source of HP tags) with the
+    // raw-read methylation bam (source of real MM/ML tags, from
+    // minimap2_methylation) by sampleID, then projects HP onto the raw
+    // bam -- see TRANSFER_HP_TAGS for why these are two separate bams.
+    take :
+        phased_data   // sampleID, phased_bam, phased_bai (e.g. longphase_sv_ch)
+        raw_bam_data  // sampleID, raw_bam, raw_bai (minimap2_methylation.out.bams)
+
+    main :
+        joined_ch = phased_data
+            .join(raw_bam_data)
+            .map { sampleID, phased_bam, phased_bai, raw_bam, raw_bai ->
+                tuple(sampleID, phased_bam, phased_bai, raw_bam, raw_bai)
+            }
+
+        TRANSFER_HP_TAGS( joined_ch )
+
+    emit :
+        haplotagged = TRANSFER_HP_TAGS.out.haplotagged_ch
 }
 
 include { MODKIT_PILEUP } from '../modules/modkit/main.nf'

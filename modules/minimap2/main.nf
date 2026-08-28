@@ -77,9 +77,13 @@ process MINIMAP2_ALIGN {
 
     name=\$(basename ${fastq} .fastq.gz)
 
-    # -y copies the MM/ML methylation tags (carried as fastq comments by
-    # SAMTOOLS_CONVERT_BAM_TO_FASTQ's -T flag) back onto the aligned reads --
-    # without it they're silently dropped here even if present in the fastq.
+    # No -y here: this only ever runs on herro-corrected reads (see
+    # main.nf, ont_ch_corrected), whose FASTA headers carry a literal
+    # "None" comment (herro's own writer, not a real MM/ML tag) rather
+    # than the methylation tags -y expects -- copying it into the SAM aux
+    # field produces unparseable output ("Incomplete aux field"). herro
+    # also rewrites/consensus-corrects the sequence, so original per-base
+    # modification calls wouldn't have valid coordinates on it anyway.
     # Piped straight into sort rather than written to an intermediate SAM
     # file -- with --MD on a full WGS alignment the uncompressed SAM can run
     # to 100s of GB, and a full/quota-exceeded disk truncates it silently.
@@ -88,7 +92,6 @@ process MINIMAP2_ALIGN {
         -x map-ont \\
         -a \\
         -Y \\
-        -y \\
         --MD \\
         ${index} \\
         ${fastq} \\
@@ -104,7 +107,49 @@ process MINIMAP2_ALIGN {
 
 }
 
-process MAP_ASM_TO_REF { 
+process MINIMAP2_ALIGN_METHYLATION {
+
+    label 'minimap2'
+
+    publishDir "${params.results}/minimap2_methylation", mode : 'copy'
+
+    input :
+        path index
+        tuple val(sampleID), val(fastq)
+
+    output :
+        tuple val(sampleID), path("*.sorted.bam"), path("*.sorted.bam.bai"), emit : bam_ch
+
+    script :
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    name=\$(basename ${fastq} .fastq.gz)
+
+    # Same as MINIMAP2_ALIGN but on the RAW (pre-herro) reads, which is
+    # the only place real MM/ML methylation tags survive -- -y copies them
+    # (carried as fastq comments by SAMTOOLS_CONVERT_BAM_TO_FASTQ's -T
+    # flag) onto the aligned reads. This bam has no HP (haplotype) tags of
+    # its own; see TRANSFER_HP_TAGS, which projects them over from the
+    # herro-corrected/phased bam before modkit runs.
+    minimap2 \\
+        -t ${task.cpus} \\
+        -x map-ont \\
+        -a \\
+        -Y \\
+        -y \\
+        --MD \\
+        ${index} \\
+        ${fastq} \\
+      | samtools sort -@ ${task.cpus} -o \${name}.minimap2.sorted.bam -
+
+    samtools index -@ ${task.cpus} \${name}.minimap2.sorted.bam
+    """
+
+}
+
+process MAP_ASM_TO_REF {
 
     tag "$sampleID"
     label 'minimap2'
