@@ -51,11 +51,9 @@ def helpMessage() {
                                          Run the minimap2/clair3/longphase alignment branch (default: true)
 
     Error correction (HERRO -- GPU deep-learning ONT self-correction, https://github.com/lbcb-sci/herro):
-    --herro_model [file]                Path to HERRO model weights, resolved inside the herro_inference
-                                         container. Defaults to the R10.4.1 model baked into that image
-                                         at build time (see docker/herro/Dockerfile.inference) -- no
-                                         separate download needed. Runs on every sample, no per-sample
-                                         gating (herro has no notion of matched Illumina data).
+    --herro_model [file]                Path to HERRO R10.4.1 model weights (download from Zenodo, see
+                                         params.herro_model in nextflow.config). Runs on every sample,
+                                         no per-sample gating (herro has no notion of matched Illumina data).
     --herro_gpu_ids [str]                GPU device IDs passed to `herro inference -d` (default: '0')
     --herro_batch_size [int]            `herro inference -b` (default: 64 -- 64 for 40GB VRAM, 128 for 80GB)
     --herro_preprocess_parts [int]      Chunk count for herro's preprocess.sh, bounds memory on large read
