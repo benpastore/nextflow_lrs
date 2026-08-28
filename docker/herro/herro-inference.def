@@ -11,7 +11,14 @@
 # node whose CPU doesn't match the build machine.
 #
 #   cd docker/herro
-#   apptainer build --fakeroot herro-inference.sif herro-inference.def
+#   apptainer build --fakeroot --no-mount tmp herro-inference.sif herro-inference.def
+#
+# --no-mount tmp matters: Apptainer binds the host's /tmp into the build
+# by default, and under --fakeroot its permissions/ownership often don't
+# line up with the mapped-root user namespace, breaking apt-key's
+# temp-file creation ("Couldn't create temporary file /tmp/apt.conf.XXXXXX"
+# on every apt repo). Skipping that bind lets /tmp come from the base
+# image itself instead, which has correct root:root 1777 permissions.
 #
 # Then point nextflow.config's herro_inference container at the resulting
 # .sif path (see params.herro_inference_sif).
@@ -20,14 +27,6 @@ Bootstrap: docker
 From: nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 %post
-    # fakeroot builds from a Docker base image sometimes leave /tmp with
-    # ownership fakeroot's mapped root can't write into, which breaks
-    # apt-key's temp-file creation (surfaces as "Couldn't create temporary
-    # file /tmp/apt.conf.XXXXXX" on every apt repo, not just NVIDIA's) --
-    # recreating it up front fixes that.
-    rm -rf /tmp
-    mkdir -m 1777 /tmp
-
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y wget git unzip curl build-essential zlib1g-dev zstd libgomp1
