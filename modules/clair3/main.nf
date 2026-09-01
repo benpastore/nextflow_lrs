@@ -26,6 +26,7 @@ process CLAIR3 {
         --model_path=/opt/models/\${MODEL_NAME} \\
         --output=\$(pwd) \\
         --include_all_ctgs \\
+        --sample_name=${sampleID} \\
         --use_gpu
     
     mv merge_output.vcf.gz \$name.clair3.vcf.gz

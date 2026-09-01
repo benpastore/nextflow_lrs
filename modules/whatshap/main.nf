@@ -90,10 +90,14 @@ process WHATSHAP_PHASE_TRIO {
     printf "%s\\t%s\\t0\\t0\\t1\\t0\\n" "${child}_family" "${father}" >> ${child}.ped
     printf "%s\\t%s\\t0\\t0\\t2\\t0\\n" "${child}_family" "${mother}" >> ${child}.ped
 
+    # No --ignore-read-groups: whatshap rejects it together with --ped
+    # (pedigree mode identifies samples by name, which is the opposite of
+    # what --ignore-read-groups is for). Requires child_vcf/father_vcf/
+    # mother_vcf's sample columns to actually match ${child}/${father}/
+    # ${mother} -- see CLAIR3's --sample_name.
     whatshap phase \\
       --ped ${child}.ped \\
       --reference ${ref} \\
-      --ignore-read-groups \\
       --output ${child}.trio.whatshapphase.vcf.gz \\
       ${child_vcf} \\
       ${father_vcf} \\
