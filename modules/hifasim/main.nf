@@ -18,18 +18,16 @@ process HIFASIM {
 
     name=\$(basename ${reads} .fastq.gz)
 
-    # herro-corrected reads are FASTA content under a .fastq.gz name (see
-    # HERRO_INFERENCE) -- minimap2 tolerates this via content auto-detect,
-    # but hifiasm validates extension against content and refuses
-    # ("is in fasta format rather than fastq format"). Symlink to a
-    # correctly-named copy rather than touching the shared herro output.
-    ln -s ${reads} \${name}.fasta.gz
-
+    # No --ont: herro-corrected reads are FASTA (no quality scores, see
+    # HERRO_INFERENCE) under a misleading .fastq.gz name. --ont mode hard-
+    # requires real FASTQ and refuses FASTA regardless of extension/naming
+    # ("is in fasta format rather than fastq format"); hifiasm's default
+    # HiFi-mode path has always accepted plain FASTA, so treat the
+    # corrected reads as HiFi-equivalent input instead.
     hifiasm \\
         -t64 \\
-        --ont \\
         -o \$name \\
-        \${name}.fasta.gz
+        ${reads}
     """
 }
 
@@ -54,19 +52,17 @@ process HIFASIM_TRIO {
 
     name=\$(basename ${reads} .fastq.gz)
 
-    # herro-corrected reads are FASTA content under a .fastq.gz name (see
-    # HERRO_INFERENCE) -- minimap2 tolerates this via content auto-detect,
-    # but hifiasm validates extension against content and refuses
-    # ("is in fasta format rather than fastq format"). Symlink to a
-    # correctly-named copy rather than touching the shared herro output.
-    ln -s ${reads} \${name}.fasta.gz
-
+    # No --ont: herro-corrected reads are FASTA (no quality scores, see
+    # HERRO_INFERENCE) under a misleading .fastq.gz name. --ont mode hard-
+    # requires real FASTQ and refuses FASTA regardless of extension/naming
+    # ("is in fasta format rather than fastq format"); hifiasm's default
+    # HiFi-mode path has always accepted plain FASTA, so treat the
+    # corrected reads as HiFi-equivalent input instead.
     hifiasm \\
         -t64 \\
-        --ont \\
         -1 ${pat_yak} \\
         -2 ${mat_yak} \\
         -o \$name \\
-        \${name}.fasta.gz
+        ${reads}
     """
 }
