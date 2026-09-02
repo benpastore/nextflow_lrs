@@ -353,7 +353,11 @@ workflow {
                     no_trio: true
                 }
 
-            hifasim( assembly_gate.no_trio.map { sid, bam, fastq, pat_yak, mat_yak -> tuple(sid, bam, fastq) } )
+            // no_trio items come from a join(remainder: true) miss -- Nextflow
+            // pads the whole missing right-hand side with a single null, not
+            // one null per field, so these tuples are only 4 elements
+            // (sid, bam, fastq, null), not 5. Index rather than destructure.
+            hifasim( assembly_gate.no_trio.map { it -> tuple(it[0], it[1], it[2]) } )
 
             hifasim_trio( assembly_gate.has_trio.map { sid, bam, fastq, pat_yak, mat_yak -> tuple(sid, bam, fastq, pat_yak, mat_yak) } )
 

@@ -47,23 +47,30 @@ workflow trio_family {
         clair3( samtools_fai_index, minimap2.out.bams )
         parent_vcf_ch = clair3.out.clair3_ch.map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
 
-        // resolve full trios against yak (join keyed on father, then remapped and
-        // joined again keyed on mother -- Nextflow's join() only keys on one field
-        // at a time, so a 2-parent join needs this double-remap-and-join)
-        trio_yak_ch = trio_ch
-            .map { child, father, mother -> tuple(father, child, mother) }
-            .join( yak_ch )
-            .map { father, child, mother, pat_yak -> tuple(mother, child, father, pat_yak) }
-            .join( yak_ch )
-            .map { mother, child, father, pat_yak, mat_yak -> tuple(child, pat_yak, mat_yak) }
+        // resolve full trios against yak/parent-vcf by collecting each into a
+        // plain map and looking children up against it, rather than
+        // Channel.join() -- join() consumes each channel item once, so it
+        // silently drops any child past the first one that shares a parent
+        // (e.g. two children of the same father/mother both keying on that
+        // father: only the first join match gets paired, the second child
+        // just vanishes from the channel with no error). Parent counts are
+        // always small, so collecting to a map is cheap and correct for
+        // however many children reference the same parent.
+        yak_map_ch = yak_ch
+            .toList()
+            .map { list -> list.collectEntries { sampleID, yak -> [(sampleID): yak] } }
 
-        // resolve full trios against parent vcfs, same double-join pattern
+        trio_yak_ch = trio_ch
+            .combine( yak_map_ch )
+            .map { child, father, mother, yak_map -> tuple(child, yak_map[father], yak_map[mother]) }
+
+        vcf_map_ch = parent_vcf_ch
+            .toList()
+            .map { list -> list.collectEntries { sampleID, vcf -> [(sampleID): vcf] } }
+
         trio_phasing_ch = trio_ch
-            .map { child, father, mother -> tuple(father, child, mother) }
-            .join( parent_vcf_ch )
-            .map { father, child, mother, father_vcf -> tuple(mother, child, father, father_vcf) }
-            .join( parent_vcf_ch )
-            .map { mother, child, father, father_vcf, mother_vcf -> tuple(child, father, mother, father_vcf, mother_vcf) }
+            .combine( vcf_map_ch )
+            .map { child, father, mother, vcf_map -> tuple(child, father, mother, vcf_map[father], vcf_map[mother]) }
 
     emit:
         trio_assembly     = trio_yak_ch        // tuple(child, paternal_yak, maternal_yak)
