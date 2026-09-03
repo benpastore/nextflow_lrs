@@ -18,12 +18,7 @@ process INDEX_BAM {
     """
     #!/bin/bash
 
-    # conda's own activate.d hooks for this env (specifically
-    # binutils_linux-64's, which references $ADDR2LINE with no default)
-    # aren't written to survive `set -u` -- drop it just for activation.
-    set +u
     source activate rnaseq
-    set -u
 
     cp ${bam} .
     name=\$(basename ${bam})
@@ -65,12 +60,7 @@ process FILTER_BAM {
     """
     #!/bin/bash
 
-    # conda's own activate.d hooks for this env (specifically
-    # binutils_linux-64's, which references $ADDR2LINE with no default)
-    # aren't written to survive `set -u` -- drop it just for activation.
-    set +u
     source activate rnaseq
-    set -u
 
     name=\$(basename $bam .bam)
 
@@ -109,12 +99,7 @@ process INDEX_REFERENCE {
     """
     #!/bin/bash
 
-    # conda's own activate.d hooks for this env (specifically
-    # binutils_linux-64's, which references $ADDR2LINE with no default)
-    # aren't written to survive `set -u` -- drop it just for activation.
-    set +u
     source activate rnaseq
-    set -u
 
     samtools faidx ${ref}
     """

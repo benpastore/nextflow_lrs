@@ -18,12 +18,7 @@ process BWA_INDEX {
     """
     #!/bin/bash
 
-    # conda's own activate.d hooks for this env (specifically
-    # binutils_linux-64's, which references $ADDR2LINE with no default)
-    # aren't written to survive `set -u` -- drop it just for activation.
-    set +u
     source activate rnaseq
-    set -u
 
     prefix=\$(basename ${genome} .fa)
     bwa index -p \$prefix -a ${params.bwa_index_alg} ${genome}
@@ -66,12 +61,7 @@ process BWA_MEM {
     """
     #!/bin/bash
 
-    # conda's own activate.d hooks for this env (specifically
-    # binutils_linux-64's, which references $ADDR2LINE with no default)
-    # aren't written to survive `set -u` -- drop it just for activation.
-    set +u
     source activate rnaseq
-    set -u
 
     bwa mem ${bwa_idx} \\
         -t ${task.cpus} \\

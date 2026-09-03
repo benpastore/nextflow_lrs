@@ -21,19 +21,12 @@ process BAM_COMPARE {
     """
     #!/bin/bash
 
-    # conda's own activate.d hooks for this env (specifically
-    # binutils_linux-64's, which references $ADDR2LINE with no default)
-    # aren't written to survive `set -u` -- drop it just for activation.
-    set +u
     source activate rnaseq
-    set -u
 
     samtools index -@ ${task.cpus} ${ip_bam}
     samtools index -@ ${task.cpus} ${control_bam}
 
-    set +u
     source activate DeepTools
-    set -u
 
     name=\$(basename ${ip_bam} .bam)
 
@@ -71,9 +64,7 @@ process BAM_TO_BW {
     """
     #!/bin/bash
 
-    set +u
     source activate DeepTools
-    set -u
 
     name=\$(basename ${bam} .bam)
 
@@ -110,9 +101,7 @@ process BW_COMPARE {
     """
     #!/bin/bash
 
-    set +u
     source activate DeepTools
-    set -u
 
     name=${ip}.subtract_${control}.bw
 
@@ -146,12 +135,7 @@ process MERGE_BW {
     """
     #!/bin/bash
 
-    # conda's own activate.d hooks for this env (specifically
-    # binutils_linux-64's, which references $ADDR2LINE with no default)
-    # aren't written to survive `set -u` -- drop it just for activation.
-    set +u
     source activate rnaseq
-    set -u
 
     # make array with bigwigs 
     bws=(${bws.join(' ')})
