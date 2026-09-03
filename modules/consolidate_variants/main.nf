@@ -22,7 +22,7 @@ process CONSOLIDATE_VARIANTS {
     set -euo pipefail
 
     # conda's own activate.d hooks for this env (specifically
-    # binutils_linux-64's, which references $ADDR2LINE with no default)
+    # binutils_linux-64's, which references \$ADDR2LINE with no default)
     # aren't written to survive `set -u` -- drop it just for activation.
     set +u
     source activate rnaseq
