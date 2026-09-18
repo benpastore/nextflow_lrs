@@ -24,7 +24,7 @@ process SNPEFF_BUILD {
     cp ${genome} ${params.snpeff_db}/sequences.fa
     cp ${gtf} ${params.snpeff_db}/genes.gtf
 
-    snpEff build \\
+    snpEff -Xmx${params.snpeff_java_mem} build \\
         -gtf22 \\
         -dataDir \$(pwd) \\
         -configOption ${params.snpeff_db}.genome=${params.snpeff_db} \\
@@ -55,7 +55,7 @@ process SNPEFF {
     #!/bin/bash
     set -euo pipefail
 
-    snpEff \\
+    snpEff -Xmx${params.snpeff_java_mem} \\
         -dataDir \$(pwd) \\
         -configOption ${params.snpeff_db}.genome=${params.snpeff_db} \\
         -csvStats ${sampleID}.snpeff.csv \\
