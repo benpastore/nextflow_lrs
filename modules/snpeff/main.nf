@@ -27,6 +27,7 @@ process SNPEFF_BUILD {
     snpEff build \\
         -gtf22 \\
         -dataDir \$(pwd) \\
+        -configOption ${params.snpeff_db}.genome=${params.snpeff_db} \\
         -v ${params.snpeff_db} \\
         -noCheckCds \\
         -noCheckProtein
@@ -56,6 +57,7 @@ process SNPEFF {
 
     snpEff \\
         -dataDir \$(pwd) \\
+        -configOption ${params.snpeff_db}.genome=${params.snpeff_db} \\
         -csvStats ${sampleID}.snpeff.csv \\
         -htmlStats ${sampleID}.snpeff.html \\
         ${params.snpeff_args ?: ''} \\
