@@ -151,6 +151,7 @@ include { hapdiff } from '../../subworkflows/ont.nf'
 include { genome_stats } from '../../subworkflows/ont.nf'
 include { chrom_coverage } from '../../subworkflows/ont.nf'
 include { consolidate_variants } from '../../subworkflows/ont.nf'
+include { snpeff } from '../../subworkflows/ont.nf'
 include { alphagenome } from '../../subworkflows/ont.nf'
 
 include { herro_correction } from '../../subworkflows/herro.nf'
@@ -490,6 +491,17 @@ workflow {
             }
 
         consolidate_variants( consolidate_input_ch )
+
+        ////////////////// SNPEFF VARIANT-EFFECT ANNOTATION /////////////////////
+        // annotates the consolidated per-sample master VCF (alignment- +
+        // assembly-based callers merged above) with predicted functional
+        // effects/impact per variant.
+        if (params.run_snpeff) {
+            if (!params.snpeff_db) { exit 1, 'params.snpeff_db not set!' }
+            if (!params.snpeff_data_dir) { exit 1, 'params.snpeff_data_dir not set!' }
+
+            snpeff( consolidate_variants.out.consolidated_ch, ch_genome, params.snpeff_gtf ? file(params.snpeff_gtf, checkIfExists: true) : file("NO_FILE") )
+        }
 
         ////////////////// TRIO-AWARE PEDIGREE PHASING (children only) /////////////////////
         // Runs after variant consolidation (children-only step; parents never

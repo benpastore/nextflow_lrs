@@ -397,6 +397,35 @@ workflow consolidate_variants {
         consolidated_ch = CONSOLIDATE_VARIANTS.out.consolidated_ch
 }
 
+include { SNPEFF_BUILD; SNPEFF } from '../modules/snpeff/main.nf'
+workflow snpeff {
+
+    take :
+        data     // sampleID, vcf
+        genome   // fasta used to build the db when one isn't already there
+        gtf      // gene models used to build the db when one isn't already there
+
+    main :
+        // skip the (slow) database build whenever a previous run already
+        // published snpEffectPredictor.bin under snpeff_data_dir/snpeff_db
+        snpeff_db_exists = file("${params.snpeff_data_dir}/${params.snpeff_db}/snpEffectPredictor.bin").exists()
+
+        if (snpeff_db_exists) {
+            snpeff_db_ch = Channel.value(file("${params.snpeff_data_dir}/${params.snpeff_db}"))
+        } else {
+            if (!params.snpeff_gtf) { exit 1, "snpEff database ${params.snpeff_db} not found in ${params.snpeff_data_dir} and params.snpeff_gtf not set to build one!" }
+
+            SNPEFF_BUILD( genome, gtf )
+            snpeff_db_ch = SNPEFF_BUILD.out.snpeff_db_ch
+        }
+
+        SNPEFF( data, snpeff_db_ch )
+
+    emit :
+        snpeff_vcf_ch = SNPEFF.out.snpeff_vcf_ch
+        snpeff_stats_ch = SNPEFF.out.snpeff_stats_ch
+}
+
 include { ALPHAGENOME } from '../modules/alphagenome/main.nf'
 workflow alphagenome {
 
