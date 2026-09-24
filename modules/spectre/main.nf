@@ -12,7 +12,7 @@ process SPECTRE {
     output:
         tuple val(sampleID), path("*.spectre.vcf.gz"), path("*.spectre.vcf.gz.tbi"), emit: spectre_vcf_ch
         tuple val(sampleID), path("*.spectre.bed.gz"), path("*.spectre.bed.gz.tbi"), emit: spectre_bed_ch
-        tuple val(sampleID), path("*.spectre.spc"), emit: spectre_spc_ch
+        tuple val(sampleID), path("*.spectre.spc"), optional: true, emit: spectre_spc_ch
         path("*mosdepth.regions.bed.gz")
 
     script:
@@ -50,7 +50,10 @@ process SPECTRE {
     SPECTRE_VCF=\${SPECTRE_VCF#./}
     SPECTRE_BED=\$(find . -maxdepth 1 \\( -name "*.bed" -o -name "*.bed.gz" \\) -not -name "*mosdepth*" | head -n 1)
     SPECTRE_BED=\${SPECTRE_BED#./}
-    SPECTRE_SPC=\$(find . -maxdepth 1 -name "*.spc" | head -n 1)
+    # not all spectre versions emit a .spc (it's not documented/guaranteed
+    # output) -- search recursively in case it's nested under a subdir
+    # spectre created, but don't treat a genuine absence as an error.
+    SPECTRE_SPC=\$(find . -name "*.spc" | head -n 1)
     SPECTRE_SPC=\${SPECTRE_SPC#./}
 
     if [[ "\$SPECTRE_VCF" == *.gz ]]; then
@@ -67,6 +70,8 @@ process SPECTRE {
     fi
     tabix -f -0 -s 1 -b 2 -e 3 \${name}.spectre.bed.gz
 
-    [ "\$SPECTRE_SPC" = "\${name}.spectre.spc" ] || mv "\$SPECTRE_SPC" \${name}.spectre.spc
+    if [ -n "\$SPECTRE_SPC" ]; then
+        [ "\$SPECTRE_SPC" = "\${name}.spectre.spc" ] || mv "\$SPECTRE_SPC" \${name}.spectre.spc
+    fi
     """
 }
