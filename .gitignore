@@ -21,6 +21,8 @@ genomes/
 .nextflow/
 .nextflow.log*
 singularity/*
+containers/
+snpeff_data/
 # Singularity images and temporary downloads
 **/singularity/
 *.img
