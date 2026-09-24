@@ -143,6 +143,8 @@ include { clair3 } from '../../subworkflows/ont.nf'
 include { sniffles } from '../../subworkflows/ont.nf'
 include { spectre } from '../../subworkflows/ont.nf'
 include { straglr } from '../../subworkflows/ont.nf'
+include { haplotype_annotate_straglr } from '../../subworkflows/ont.nf'
+include { haplotype_annotate_spectre } from '../../subworkflows/ont.nf'
 include { paraphase } from '../../subworkflows/ont.nf'
 include { methylation_haplotag } from '../../subworkflows/ont.nf'
 include { modkit } from '../../subworkflows/ont.nf'
@@ -449,8 +451,23 @@ workflow {
         // straggler (expansion repeats)
         straglr( haplo_ch_v2, samtools_fai_index )
 
+        // straglr has no native haplotype-aware genotyping mode -- tag each
+        // call post-hoc from the HP:i:1/HP:i:2 reads already in haplo_ch_v2
+        // (see bin/annotate_haplotype.py)
+        straglr_haplotag_input_ch = straglr.out.straglr
+            .join( haplo_ch_v2 )
+            .map { sampleID, tsv, bed, bam, bai -> tuple(sampleID, tsv, bed, bam, bai) }
+        haplotype_annotate_straglr( straglr_haplotag_input_ch )
+
         // spectre CNV
         spectre( haplo_ch_v2, samtools_fai_index )
+
+        // same rationale as straglr above -- spectre also has no native
+        // haplotype-aware CNV calling mode
+        spectre_haplotag_input_ch = spectre.out.spectre_bed_ch
+            .join( haplo_ch_v2 )
+            .map { sampleID, bed_gz, bed_gz_tbi, bam, bai -> tuple(sampleID, bed_gz, bed_gz_tbi, bam, bai) }
+        haplotype_annotate_spectre( spectre_haplotag_input_ch )
 
         // paraphase (SMA/SMN1-SMN2 region reconstruction from segmental duplications)
         paraphase( haplo_ch_v2, samtools_fai_index )

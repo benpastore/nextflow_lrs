@@ -87,7 +87,7 @@ process INDEX_REFERENCE {
     label 'high'
     tag "index_reference"
 
-    publishDir "${params.results}/reference", mode: params.publish_mode
+    publishDir "${params.results}/02_reference", mode: params.publish_mode
 
     input:
         path(ref)
@@ -132,7 +132,7 @@ process SAMTOOLS_CONVERT_BAM_TO_FASTQ {
     tag "convert_bam2fastq"
     label 'samtools_high'
 
-    publishDir "${params.results}/samtools", mode: params.publish_mode
+    publishDir "${params.results}/03_prep/samtools_convert_bam_to_fastq", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(unal_bam)
@@ -160,7 +160,7 @@ process SAMTOOLS_FASTQ_TO_BAM {
     tag "$sampleID"
     label 'samtools_high'
 
-    publishDir "${params.results}/samtools", mode: params.publish_mode
+    publishDir "${params.results}/03_prep/samtools_fastq_to_bam", mode: params.publish_mode
 
     input:
         tuple val(sampleID), path(fastq), path(orig_bam)

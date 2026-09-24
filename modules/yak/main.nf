@@ -3,7 +3,7 @@ process YAK_COUNT {
     tag "$sampleID"
     label 'yak'
 
-    publishDir "${params.results}/yak", mode: params.publish_mode
+    publishDir "${params.results}/04_assembly/yak", mode: params.publish_mode
 
     // fastqs is a list (one ONT fastq.gz, or a pair of Illumina R1/R2) --
     // yak count just wants a whitespace-separated list of read files.

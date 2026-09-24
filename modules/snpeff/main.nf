@@ -40,7 +40,7 @@ process SNPEFF {
     label 'snpeff'
     errorStrategy 'ignore'
 
-    publishDir "${params.results}/variants/snpeff", mode: params.publish_mode
+    publishDir "${params.results}/06_variants/snpeff", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(vcf)

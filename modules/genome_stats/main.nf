@@ -4,7 +4,7 @@ process GENOME_STATS {
     label 'samtools'
     errorStrategy 'ignore'
 
-    publishDir "${params.results}/genome_stats", mode: params.publish_mode
+    publishDir "${params.results}/04_assembly/genome_stats", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(reads), val(hap1_fa), val(hap2_fa)
@@ -43,7 +43,7 @@ process CHROM_COVERAGE {
     label 'samtools'
     errorStrategy 'ignore'
 
-    publishDir "${params.results}/genome_stats", mode: params.publish_mode
+    publishDir "${params.results}/04_assembly/genome_stats", mode: params.publish_mode
 
     input:
         tuple val(sampleID), path(hap1_bam), path(hap1_bai), path(hap2_bam), path(hap2_bai)

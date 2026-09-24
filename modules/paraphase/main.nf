@@ -3,7 +3,7 @@ process PARAPHASE {
     tag "$sampleID"
     label 'paraphase'
 
-    publishDir "${params.results}/SMA_ASSEMBLY", mode: params.publish_mode
+    publishDir "${params.results}/06_variants/paraphase", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(bam), val(bai)

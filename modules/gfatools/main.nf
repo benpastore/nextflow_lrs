@@ -3,7 +3,7 @@ process GFA_CONVERT {
     errorStrategy 'ignore'
 
 
-    publishDir "${params.results}/gfatools", mode: params.publish_mode
+    publishDir "${params.results}/04_assembly/gfatools", mode: params.publish_mode
 
     input: 
         tuple val(sampleID), val(bam), val(reads), path(hap1), path(hap2)
@@ -29,7 +29,7 @@ process GFA_FAIDX {
     label 'samtools'
     errorStrategy 'ignore'
 
-    publishDir "${params.results}/gfatools", mode: params.publish_mode
+    publishDir "${params.results}/04_assembly/gfatools", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(bam), val(reads), path(combined_fa)

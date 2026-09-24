@@ -2,3 +2,6 @@
 - deconvolute sma region 
 - polish alignments (hero??)
 - tracking haplotype family structure 
+
+
+NNN out SMN1 locus between serf and naip to force all reads to align to SMN2

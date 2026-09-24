@@ -2,7 +2,7 @@ process HIFASIM {
 
     label 'hifasim'
 
-    publishDir "${params.results}/hifasim", mode: params.publish_mode
+    publishDir "${params.results}/04_assembly/hifasim", mode: params.publish_mode
 
     input :
         tuple val(sampleID), val(bam), val(reads) 
@@ -36,7 +36,7 @@ process HIFASIM_TRIO {
     tag "$sampleID"
     label 'hifasim'
 
-    publishDir "${params.results}/hifasim_trio", mode: params.publish_mode
+    publishDir "${params.results}/04_assembly/hifasim_trio", mode: params.publish_mode
 
     input :
         tuple val(sampleID), val(bam), val(reads), val(pat_yak), val(mat_yak)

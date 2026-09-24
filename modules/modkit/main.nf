@@ -60,7 +60,7 @@ process MODKIT_PILEUP {
     tag "$sampleID"
     label 'modkit'
 
-    publishDir "${params.results}/methylation/modkit", mode: params.publish_mode
+    publishDir "${params.results}/07_methylation/modkit", mode: params.publish_mode
 
     // Reference-coordinate methylation pileup, split by haplotype. Runs on
     // TRANSFER_HP_TAGS's output -- the RAW (pre-herro) read alignment,

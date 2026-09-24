@@ -3,7 +3,7 @@ process LONGPHASE {
     label 'longphase'
     tag "$sampleID"
 
-    publishDir "${params.results}/longphase", mode: 'copy'
+    publishDir "${params.results}/05_alignment/longphase", mode: 'copy'
 
     input:
         tuple val(ref_fa), val(ref_fai)
@@ -63,7 +63,7 @@ process LONGPHASE_SV {
     label 'longphase'
     tag "$sampleID"
 
-    publishDir "${params.results}/longphase_sv", mode: 'copy'
+    publishDir "${params.results}/05_alignment/longphase_sv", mode: 'copy'
 
     input:
         tuple val(ref_fa), val(ref_fai)

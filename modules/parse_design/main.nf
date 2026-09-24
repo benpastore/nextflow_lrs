@@ -3,7 +3,7 @@ process DESIGN_INPUT {
 
     label 'low'
 
-    publishDir "$params.results/samples", mode : 'copy', pattern : "*csv"
+    publishDir "$params.results/01_samples", mode : 'copy', pattern : "*csv"
 
     input : 
         val(design)

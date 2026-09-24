@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import time
 import os
+import gzip
+import pickle
 import logging
 import colorlog
 import itertools
@@ -70,6 +72,107 @@ def get_ann(info_str):
             ann = field.split('=', 1)[1]
             return [x.split("|") for x in ann.split(",")]
     return False
+
+
+class GnomadNFEAnnotator:
+    """
+    Lazy-loading annotator for gnomAD non-Finnish European (AF_nfe) allele
+    frequencies, sourced from a gnomAD VCF already lifted onto the T2T-CHM13
+    assembly (e.g. Ensembl's GCA_009914755.4 rapid-release gnomAD VCF) --
+    since our variants are called against CHM13/hs1, no liftOver is needed
+    as long as the resource is already in that coordinate system.
+    """
+
+    def __init__(self, gnomad_vcf_path=None):
+        self.gnomad_vcf_path = gnomad_vcf_path
+        self.af_dict = None
+
+    @timing
+    def load(self):
+        """Load (or build+cache) the CHROM:POS:REF>ALT -> AF_nfe lookup."""
+        if self.af_dict is not None:
+            return  # Already loaded
+
+        if not self.gnomad_vcf_path:
+            logger.warning("No gnomAD CHM13 VCF provided")
+            return
+
+        pickle_file = f"{self.gnomad_vcf_path}.pickle"
+
+        if os.path.exists(pickle_file):
+            logger.info(f"Loading cached gnomAD AF_nfe lookup from {pickle_file}...")
+            with open(pickle_file, 'rb') as f:
+                self.af_dict = pickle.load(f)
+            logger.info(f"gnomAD AF_nfe lookup loaded: {len(self.af_dict):,} variants")
+            return
+
+        logger.info(f"Building gnomAD AF_nfe lookup from {self.gnomad_vcf_path}...")
+        logger.info(f"Memory before loading: {get_memory_usage():.2f} GB")
+
+        af_dict = {}
+        opener = gzip.open if self.gnomad_vcf_path.endswith('.gz') else open
+        with opener(self.gnomad_vcf_path, 'rt') as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+
+                fields = line.rstrip("\n").split("\t")
+                chrom, pos, ref, alt, info = fields[0], fields[1], fields[3], fields[4], fields[7]
+
+                # Normalize contig naming to match hs1.fa (UCSC-style "chr1", ...)
+                if not chrom.startswith("chr"):
+                    chrom = f"chr{chrom}"
+
+                af_nfe = None
+                for entry in info.split(';'):
+                    if entry.startswith('AF_nfe='):
+                        af_nfe = entry.split('=', 1)[1]
+                        break
+
+                if af_nfe is None:
+                    continue
+
+                # gnomAD sites VCFs are allele-split (one ALT per line), but
+                # guard against a stray multiallelic record anyway.
+                alts = alt.split(',')
+                afs = af_nfe.split(',')
+                if len(alts) != len(afs):
+                    continue
+
+                for a, af in zip(alts, afs):
+                    try:
+                        af_dict[f"{chrom}:{pos}:{ref}>{a}"] = float(af)
+                    except ValueError:
+                        continue
+
+        self.af_dict = af_dict
+
+        logger.info(f"Caching gnomAD AF_nfe lookup to {pickle_file} for faster future loading...")
+        with open(pickle_file, 'wb') as f:
+            pickle.dump(self.af_dict, f)
+
+        logger.info(f"gnomAD AF_nfe lookup built: {len(self.af_dict):,} variants")
+        logger.info(f"Memory after loading: {get_memory_usage():.2f} GB")
+
+    def annotate_batch(self, variants):
+        """
+        Look up gnomAD AF_nfe for a batch of variants.
+
+        Args:
+            variants: List of (chrom, pos, ref, alt) tuples
+
+        Returns:
+            dict: variant_id -> AF_nfe (or None if not found)
+        """
+        if self.af_dict is None:
+            return {f"{c}:{p}:{r}>{a}": None for c, p, r, a in variants}
+
+        results = {}
+        for chrom, pos, ref, alt in variants:
+            variant_id = f"{chrom}:{pos}:{ref}>{alt}"
+            results[variant_id] = self.af_dict.get(variant_id, None)
+
+        return results
 
 
 @timing
@@ -434,15 +537,17 @@ def extract_genes(ann_list):
 
 
 @timing
-def parallel_recessive_modifier_ont(discordant_sib_pairs, concordant_severe_sibs, model):
+def parallel_recessive_modifier_ont(discordant_sib_pairs, concordant_severe_sibs, model,
+                                    gnomad_annotator=None):
     """
-    Main analysis function (no AlphaMissense / gnomAD annotation).
+    Main analysis function (no AlphaMissense annotation).
 
     Flow:
     1. Parse VCFs
     2. Apply genetic model filtering
     3. Apply multi-sib filtering
-    4. Build final results table
+    4. Annotate ONLY passing variants with gnomAD AF_nfe (if provided)
+    5. Build final results table
     """
     logger.info(f"\n{'='*60}")
     logger.info(f"Starting analysis with {model} model")
@@ -562,12 +667,31 @@ def parallel_recessive_modifier_ont(discordant_sib_pairs, concordant_severe_sibs
         logger.warning("No variants passed filtering - returning empty results table")
         return pd.DataFrame(columns=[
             "#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO",
-            "zygosity", "gene", "patients", "N_sibs"
+            "zygosity", "gene", "patients", "N_sibs", "gnomad_AF_NFE"
         ])
 
-    # Step 4: Build final DataFrame
+    # Step 4: Annotate ONLY passing variants with gnomAD AF_nfe
+    var_id_to_af = {}
+    if gnomad_annotator is not None:
+        logger.info("PHASE 4: Annotating passing variants with gnomAD AF_nfe...")
+        gnomad_annotator.load()
+
+        gnomad_batch = [
+            (var_id, chrom, pos, ref, alt)
+            for var_id, (patients, zygosity, annlist, chrom, pos, ref, alt) in final_pass.items()
+        ]
+        gnomad_results = gnomad_annotator.annotate_batch(
+            [(chrom, pos, ref, alt) for _, chrom, pos, ref, alt in gnomad_batch]
+        )
+        for var_id, chrom, pos, ref, alt in gnomad_batch:
+            var_id_to_af[var_id] = gnomad_results.get(f"{chrom}:{pos}:{ref}>{alt}")
+
+        n_with_af = sum(1 for af in var_id_to_af.values() if af is not None)
+        logger.info(f"gnomAD AF_nfe found for {n_with_af}/{len(final_pass)} passing variants")
+
+    # Step 5: Build final DataFrame
     logger.info(f"\n{'='*60}")
-    logger.info(f"PHASE 4: Building final results table...")
+    logger.info(f"PHASE 5: Building final results table...")
     logger.info(f"{'='*60}\n")
 
     final_df = pd.DataFrame.from_dict(final_pass, orient='index').reset_index()
@@ -598,15 +722,17 @@ def parallel_recessive_modifier_ont(discordant_sib_pairs, concordant_severe_sibs
     final_df['FILTER'] = "PASS"
     final_df['ID'] = final_df['variant_id']
     final_df['N_sibs'] = final_df['patients'].apply(lambda x: len(set(x)))
+    final_df['gnomad_AF_NFE'] = final_df['variant_id'].map(var_id_to_af)
 
     final_df = final_df[[
         "#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO",
-        "zygosity", "gene", "patients", "N_sibs"
+        "zygosity", "gene", "patients", "N_sibs", "gnomad_AF_NFE"
     ]].reset_index(drop=True)
 
     # Summary statistics
     N_homo = final_df.query('zygosity == "homo"').shape[0]
     N_het = final_df.query('zygosity == "het"').shape[0]
+    N_with_gnomad = final_df['gnomad_AF_NFE'].notna().sum()
 
     # Get unique genes
     all_genes = set()
@@ -621,6 +747,7 @@ def parallel_recessive_modifier_ont(discordant_sib_pairs, concordant_severe_sibs
     logger.info(f"  - Homozygous: {N_homo}")
     logger.info(f"  - Heterozygous: {N_het}")
     logger.info(f"  - Unique genes: {len(all_genes)}")
+    logger.info(f"  - With gnomAD AF_nfe: {N_with_gnomad} ({N_with_gnomad/(N_homo+N_het)*100:.1f}%)")
     logger.info(f"Final memory usage: {get_memory_usage():.2f} GB")
     logger.info(f"{'='*60}\n")
 
@@ -631,7 +758,7 @@ def parallel_recessive_modifier_ont(discordant_sib_pairs, concordant_severe_sibs
 def get_args():
     """Parse command line parameters."""
     parser = argparse.ArgumentParser(
-        description='Recessive Modifier Analysis (ONT long-read, no external allele-frequency/pathogenicity annotation)'
+        description='Recessive Modifier Analysis (ONT long-read, no AlphaMissense annotation)'
     )
     parser.add_argument("-model", type=str, required=True, choices=['dominant', 'recessive'])
     parser.add_argument("-discordant", type=str, required=True,
@@ -639,6 +766,16 @@ def get_args():
                              "mild_vcf<TAB>severe_vcf1,severe_vcf2,... (one pair per line)")
     parser.add_argument("-concordant", type=str, default=None,
                         help="Path to a file listing one concordant-severe VCF per line")
+    parser.add_argument("-gnomad_chm13_vcf", type=str, default=None,
+                        help="Path to a gnomAD VCF already lifted onto T2T-CHM13 coordinates "
+                             "(e.g. Ensembl's GCA_009914755.4 rapid-release gnomAD VCF: "
+                             "https://ftp.ensembl.org/pub/rapid-release/species/Homo_sapiens/"
+                             "GCA_009914755.4/ensembl/variation/2022_10/vcf/"
+                             "Homo_sapiens-GCA_009914755.4-2022_10-gnomad.vcf.gz -- since our "
+                             "variants are called against hs1/CHM13, no liftOver is needed as "
+                             "long as this resource is already in CHM13 coordinates). Parsed "
+                             "once and pickle-cached (<path>.pickle) for fast reuse. Omit to "
+                             "skip AF_nfe annotation.")
     parser.add_argument("-output", type=str, default=None)
 
     return parser.parse_args()
@@ -672,17 +809,23 @@ def main():
     """Main execution function."""
     args = get_args()
 
-    logger.info(f"Starting analysis (no AlphaMissense/gnomAD annotation)")
+    logger.info(f"Starting analysis (no AlphaMissense annotation)")
     logger.info(f"Initial memory usage: {get_memory_usage():.2f} GB")
 
     discordant_sibs = load_discordant_pairs(args.discordant)
     concordant_sibs = load_concordant_sibs(args.concordant)
+
+    gnomad_annotator = None
+    if args.gnomad_chm13_vcf:
+        logger.info("Initializing gnomAD AF_nfe annotator (lazy loading)...")
+        gnomad_annotator = GnomadNFEAnnotator(args.gnomad_chm13_vcf)
 
     # Run analysis
     res = parallel_recessive_modifier_ont(
         discordant_sibs,
         concordant_sibs,
         args.model,
+        gnomad_annotator,
     )
 
     # Save results

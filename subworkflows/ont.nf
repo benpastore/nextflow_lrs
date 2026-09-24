@@ -279,17 +279,19 @@ workflow sniffles {
 }
 
 include { SPECTRE } from '../modules/spectre/main.nf'
-workflow spectre { 
+workflow spectre {
 
-    take : 
-        data 
+    take :
+        data
         genome
-    
-    main : 
+
+    main :
         SPECTRE( data, genome )
-    
-    emit : 
-        spectre = SPECTRE.out.spectre_cnv_ch
+
+    emit :
+        spectre_vcf_ch = SPECTRE.out.spectre_vcf_ch
+        spectre_bed_ch = SPECTRE.out.spectre_bed_ch
+        spectre_spc_ch = SPECTRE.out.spectre_spc_ch
 }
 
 include { STRAGLR } from '../modules/straglr/main.nf'
@@ -304,6 +306,34 @@ workflow straglr {
 
     emit :
         straglr = STRAGLR.out.straglr_ch
+}
+
+// Post-hoc HP-tag haplotype annotation for straglr/spectre (see
+// bin/annotate_haplotype.py -- neither tool has a native phasing mode).
+include { HAPLOTYPE_ANNOTATE_STRAGLR ; HAPLOTYPE_ANNOTATE_SPECTRE } from '../modules/haplotype_annotate/main.nf'
+
+workflow haplotype_annotate_straglr {
+
+    take :
+        data // sampleID, tsv, bed, bam, bai
+
+    main :
+        HAPLOTYPE_ANNOTATE_STRAGLR( data )
+
+    emit :
+        straglr_haplotagged_ch = HAPLOTYPE_ANNOTATE_STRAGLR.out.straglr_haplotagged_ch
+}
+
+workflow haplotype_annotate_spectre {
+
+    take :
+        data // sampleID, bed_gz, bed_gz_tbi, bam, bai
+
+    main :
+        HAPLOTYPE_ANNOTATE_SPECTRE( data )
+
+    emit :
+        spectre_haplotagged_ch = HAPLOTYPE_ANNOTATE_SPECTRE.out.spectre_haplotagged_ch
 }
 
 include { PARAPHASE } from '../modules/paraphase/main.nf'

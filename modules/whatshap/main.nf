@@ -67,7 +67,7 @@ process WHATSHAP_PHASE_TRIO {
 
     label 'whatshap'
     tag "${child}"
-    publishDir "${params.results}/variants/whatshap_trio_phased", mode: params.publish_mode
+    publishDir "${params.results}/06_variants/whatshap_trio_phased", mode: params.publish_mode
 
     // Additive, trio-aware refinement of the child's small-variant phasing,
     // run alongside (not instead of) the existing longphase-based

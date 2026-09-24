@@ -6,7 +6,7 @@ process NANOPLOT_RAW {
 
     tag "${sampleID}_nanoplot_raw"
 
-    publishDir "${params.results}/nanoplot_raw", mode : 'copy', pattern : "*"
+    publishDir "${params.results}/00_qc/nanoplot_raw", mode : 'copy', pattern : "*"
 
     input : 
         tuple val(sampleID), val(bam), val(fastq)

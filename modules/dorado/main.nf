@@ -2,9 +2,9 @@ process DORADO {
 
     label 'dorado'
 
-    publishDir "${params.results}/dorado", mode: params.publish_mode
+    publishDir "${params.results}/04_assembly/dorado_polish", mode: params.publish_mode
 
-    input : 
+    input :
         tuple val(sampleID), val(unal_bam), val(reads), val(hapfasta), val(hapfai)
     
     output : 
@@ -49,7 +49,7 @@ process DORADO_BASECALL {
     tag "$sampleID"
     label 'dorado'
 
-    publishDir "${params.results}/dorado_basecall", mode: params.publish_mode
+    publishDir "${params.results}/03_prep/dorado_basecall", mode: params.publish_mode
 
     input :
         tuple val(sampleID), val(pod5_dir)
@@ -74,9 +74,9 @@ process DORADO_TRIM {
 
     label 'dorado'
 
-    publishDir "${params.results}/dorado", mode: params.publish_mode
+    publishDir "${params.results}/03_prep/dorado_trim", mode: params.publish_mode
 
-    input : 
+    input :
         tuple val(sampleID), val(fastq), val(unal_bam)
     
     output : 

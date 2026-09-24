@@ -2,7 +2,7 @@ process HAPDIFF {
 
     label 'hapdiff'
 
-    publishDir "${params.results}/variants/hapdiff", mode: params.publish_mode
+    publishDir "${params.results}/06_variants/hapdiff", mode: params.publish_mode
 
     input :
         tuple val(sampleID), val(reads), val(hap1), val(hap2)

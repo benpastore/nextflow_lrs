@@ -61,7 +61,7 @@ process MINIMAP2_ALIGN {
 
     label 'minimap2'
 
-    publishDir "${params.results}/minimap2", mode : 'copy'
+    publishDir "${params.results}/05_alignment/minimap2", mode : 'copy'
 
     input : 
         path index 
@@ -111,7 +111,7 @@ process MINIMAP2_ALIGN_METHYLATION {
 
     label 'minimap2'
 
-    publishDir "${params.results}/minimap2_methylation", mode : 'copy'
+    publishDir "${params.results}/05_alignment/minimap2_methylation", mode : 'copy'
 
     input :
         path index
@@ -154,7 +154,7 @@ process MAP_ASM_TO_REF {
     tag "$sampleID"
     label 'minimap2'
 
-    publishDir "${params.results}/minimap2_map_asm_to_ref", mode : 'copy'
+    publishDir "${params.results}/05_alignment/minimap2_map_asm_to_ref", mode : 'copy'
 
     input:
         path ref_mmi 

@@ -4,7 +4,7 @@ process ALPHAGENOME {
     label 'alphagenome'
     errorStrategy 'ignore'
 
-    publishDir "${params.results}/alphagenome", mode: params.publish_mode
+    publishDir "${params.results}/08_annotation/alphagenome", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(vcf)

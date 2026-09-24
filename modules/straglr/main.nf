@@ -3,7 +3,7 @@ process STRAGLR {
     tag "$sampleID"
     label 'straglr'
 
-    publishDir "${params.results}/variants/straglr", mode: 'copy'
+    publishDir "${params.results}/06_variants/straglr", mode: 'copy'
 
     input:
         tuple val(sampleID), val(bam), val(bai)

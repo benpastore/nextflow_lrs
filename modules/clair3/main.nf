@@ -2,7 +2,7 @@ process CLAIR3 {
 
     label 'clair3'
     tag "${sampleID}"
-    publishDir "${params.results}/variants/clair3", mode: params.publish_mode
+    publishDir "${params.results}/06_variants/clair3", mode: params.publish_mode
 
     input:
         tuple val(ref), val(ref_fai)

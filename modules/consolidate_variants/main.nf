@@ -4,7 +4,7 @@ process CONSOLIDATE_VARIANTS {
     label 'low'
     errorStrategy 'ignore'
 
-    publishDir "${params.results}/variants/consolidated", mode: params.publish_mode
+    publishDir "${params.results}/06_variants/consolidated", mode: params.publish_mode
 
     input:
         tuple val(sampleID),

@@ -3,7 +3,7 @@ process SNIFFLES {
 
     label 'sniffles'
     tag "${sampleID}"
-    publishDir "${params.results}/variants/sniffles", mode: params.publish_mode
+    publishDir "${params.results}/06_variants/sniffles", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(bam), val(bai)
@@ -17,10 +17,13 @@ process SNIFFLES {
 
     name=\$(basename ${bam} .bam)
 
+    # --phase uses the HP/PS tags already on this BAM (haplotagged by
+    # longphase upstream) to emit a per-SV PHASE= field in INFO.
     sniffles \
       --input ${bam} \
       --vcf \$name.sniffles.vcf \
       --threads ${task.cpus} \
+      --phase \
       --allow-overwrite
     
     bgzip -f \$name.sniffles.vcf

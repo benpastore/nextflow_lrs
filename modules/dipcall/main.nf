@@ -3,7 +3,7 @@ process DIPCALL {
     label 'dipcall'
     tag "${sampleID}"
     
-    publishDir "${params.results}/variants/dipcall", mode: params.publish_mode
+    publishDir "${params.results}/06_variants/dipcall", mode: params.publish_mode
 
     input:
         tuple val(sampleID), val(reads), val(hap1), val(hap2)
