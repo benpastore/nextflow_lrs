@@ -5,3 +5,6 @@
 
 
 NNN out SMN1 locus between serf and naip to force all reads to align to SMN2
+
+    snpeff_data_dir = "/fs/ess/PAS0631/BEN_PIPELINE/nextflow_lrs/snpeff_data"
+    snpeff_gtf = "/fs/ess/PCON0160/ben/genomes/T2T_CHM13v2.0/UCSC_ref/hs1.ncbiRefSeq.gtf"
