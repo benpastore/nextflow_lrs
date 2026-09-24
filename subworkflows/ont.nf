@@ -311,7 +311,7 @@ workflow straglr {
 
 // Post-hoc HP-tag haplotype annotation for straglr/spectre (see
 // bin/annotate_haplotype.py -- neither tool has a native phasing mode).
-include { HAPLOTYPE_ANNOTATE_STRAGLR ; HAPLOTYPE_ANNOTATE_SPECTRE } from '../modules/haplotype_annotate/main.nf'
+include { HAPLOTYPE_ANNOTATE_STRAGLR ; HAPLOTYPE_ANNOTATE_SPECTRE ; INDEX_SPECTRE_HAPLOTAGGED_BED } from '../modules/haplotype_annotate/main.nf'
 
 workflow haplotype_annotate_straglr {
 
@@ -332,9 +332,10 @@ workflow haplotype_annotate_spectre {
 
     main :
         HAPLOTYPE_ANNOTATE_SPECTRE( data )
+        INDEX_SPECTRE_HAPLOTAGGED_BED( HAPLOTYPE_ANNOTATE_SPECTRE.out.spectre_haplotagged_raw_ch )
 
     emit :
-        spectre_haplotagged_ch = HAPLOTYPE_ANNOTATE_SPECTRE.out.spectre_haplotagged_ch
+        spectre_haplotagged_ch = INDEX_SPECTRE_HAPLOTAGGED_BED.out.spectre_haplotagged_ch
 }
 
 include { PARAPHASE } from '../modules/paraphase/main.nf'

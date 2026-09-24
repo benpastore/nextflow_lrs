@@ -48,13 +48,11 @@ process HAPLOTYPE_ANNOTATE_SPECTRE {
     tag "$sampleID"
     label 'low' // see HAPLOTYPE_ANNOTATE_STRAGLR above
 
-    publishDir "${params.results}/06_variants/spectre", mode: params.publish_mode
-
     input:
         tuple val(sampleID), path(bed_gz), path(bed_gz_tbi), path(bam), path(bai)
 
     output:
-        tuple val(sampleID), path("*.spectre.haplotagged.bed.gz"), path("*.spectre.haplotagged.bed.gz.tbi"), emit: spectre_haplotagged_ch
+        tuple val(sampleID), path("*.spectre.haplotagged.bed"), emit: spectre_haplotagged_raw_ch
 
     script:
     """
@@ -75,8 +73,30 @@ process HAPLOTYPE_ANNOTATE_SPECTRE {
         --mode spectre \\
         --output \${name}.spectre.haplotagged.bed \\
         --flank ${params.haplotype_flank_bp ?: 1000}
+    """
+}
 
-    bgzip -f \${name}.spectre.haplotagged.bed
-    tabix -f -0 -s 1 -b 2 -e 3 \${name}.spectre.haplotagged.bed.gz
+process INDEX_SPECTRE_HAPLOTAGGED_BED {
+
+    tag "$sampleID"
+    // the rnaseq container's bgzip is broken (missing libcrypto.so.1.0.0),
+    // same underlying issue INDEX_SNIFFLES_VCF works around -- compress +
+    // index under the bcftools container instead.
+    label "bcftools"
+    publishDir "${params.results}/06_variants/spectre", mode: params.publish_mode
+
+    input:
+        tuple val(sampleID), path(bed)
+
+    output:
+        tuple val(sampleID), path("*.spectre.haplotagged.bed.gz"), path("*.spectre.haplotagged.bed.gz.tbi"), emit: spectre_haplotagged_ch
+
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    bgzip -f ${bed}
+    tabix -f -0 -s 1 -b 2 -e 3 ${bed}.gz
     """
 }
