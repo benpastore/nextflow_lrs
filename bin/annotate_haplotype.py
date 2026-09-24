@@ -32,9 +32,12 @@ def count_hp_reads(bam, chrom, pos, flank, hp_value):
     start = max(1, pos - flank)
     end = pos + flank
     region = f"{chrom}:{start}-{end}"
+    # capture_output=/text= need Python >=3.7 -- the rnaseq container's
+    # `rnaseq` conda env runs 3.6, so use the equivalent stdout/stderr pipes.
     result = subprocess.run(
         ["samtools", "view", "-c", "-d", f"HP:{hp_value}", bam, region],
-        capture_output=True, text=True, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        universal_newlines=True, check=True,
     )
     return int(result.stdout.strip())
 
