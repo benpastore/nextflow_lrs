@@ -173,6 +173,16 @@ Assembly-based SV calling (`hapdiff.py`) against the reference, phased + unphase
 
 ## 5. Alignment-based variant calling — `subworkflows/ont.nf`, gated by `--alignment_based_variant_calling` (default `true`)
 
+How each caller here ends up with (or without) haplotype information, since it differs per tool:
+
+| Caller | Haplotype info | How |
+|---|---|---|
+| Clair3 | Real, native phase | Phased downstream by `LONGPHASE`/`LONGPHASE_SV` (`GT` with `\|` + `PS`), not by Clair3 itself |
+| Sniffles | Real, native phase | `--phase` reads the HP/PS tags already on its input bam, writes `PHASE=` in `INFO` |
+| Straglr | Post-hoc annotation | No native mode — `HAPLOTYPE_ANNOTATE_STRAGLR` tags calls from HP-tagged reads afterward |
+| Spectre | Post-hoc annotation | Same as Straglr — `HAPLOTYPE_ANNOTATE_SPECTRE` |
+| Dipcall / Hapdiff | Inherent (assembly-based) | Already phase-resolved by construction — called from the haplotype-split assembly itself, see §4 |
+
 ### `MINIMAP2_ALIGN` — `modules/minimap2/main.nf`
 Aligns corrected ONT reads to the reference (`minimap2 -x map-ont -y --MD`); `-y` restores the MM/ML
 methylation tags `SAMTOOLS_CONVERT_BAM_TO_FASTQ` carried through as fastq comments.
@@ -190,8 +200,17 @@ First-pass phasing + haplotagging from clair3 SNP/indel calls alone (`longphase 
 - **out**: haplotagged bam → `longphase_ch`; phased vcf → `longphase_vcf_ch`; combined → `longphase_full_ch`
 
 ### `SNIFFLES` — `modules/sniffles/main.nf`
-Structural-variant calling from the longphase-haplotagged bam.
+Structural-variant calling from the longphase-haplotagged bam, with `--phase` (reads the HP/PS tags
+already on that bam and writes a per-SV `PHASE=` field in `INFO` — Sniffles doesn't need re-haplotagging
+of its own, unlike Straglr/Spectre below). Emits a raw `.vcf`, not `.vcf.gz` — see `INDEX_SNIFFLES_VCF`.
 - **in**: `tuple val(sampleID), val(bam), val(bai)`
+- **out**: `tuple val(sampleID), path("*.sniffles.vcf")` → `sniffles_raw_ch`
+
+### `INDEX_SNIFFLES_VCF` — `modules/sniffles/main.nf`
+Bgzip + tabix-index Sniffles' raw VCF, under the `bcftools` container/label — the `sniffles` biocontainer
+image ships only the `sniffles` binary itself, no htslib CLI tools, so compression can't happen inline
+in `SNIFFLES` the way most other modules do it.
+- **in**: `tuple val(sampleID), path(vcf)`
 - **out**: `tuple val(sampleID), path("*.sniffles.vcf.gz"), path("*.sniffles.vcf.gz.tbi")` → `sniffles_ch`
 
 ### `LONGPHASE_SV` — `modules/longphase/main.nf`
@@ -202,14 +221,36 @@ modkit) consume.
 - **out**: haplotagged bam → `longphase_sv_ch`; phased vcf → `longphase_sv_vcf_ch`; combined → `longphase_sv_full_ch`
 
 ### `STRAGLR` — `modules/straglr/main.nf`
-Repeat-expansion genotyping (`straglr.py`) on the final haplotagged bam.
+Repeat-expansion genotyping (`straglr.py`) on the final haplotagged bam. No native haplotype-aware
+genotyping mode (only a private ONT fork of Straglr has one) — see `HAPLOTYPE_ANNOTATE_STRAGLR` below.
 - **in**: `tuple val(sampleID), val(bam), val(bai)`, `tuple val(ref_fa), val(ref_fai)`
 - **out**: `tuple val(sampleID), path("*.straglr.tsv"), path("*.straglr.bed")` → `straglr_ch`
 
+### `HAPLOTYPE_ANNOTATE_STRAGLR` — `modules/haplotype_annotate/main.nf`
+Post-hoc haplotype tagging for Straglr calls, via `bin/annotate_haplotype.py`: tallies `HP:1`/`HP:2`
+read counts (`samtools view -c -d HP:...`) in a flank window (`--haplotype_flank_bp`, default 1000bp)
+around each locus's start/end, and appends an `HP1`/`HP2`/`AMBIGUOUS` column — rather than re-genotyping
+on a haplotype-split bam, which would halve read depth and hurt sensitivity.
+- **in**: `tuple val(sampleID), path(tsv), path(bed), path(bam), path(bai)` — straglr's own tsv/bed joined
+  with the final haplotagged bam (`longphase_sv`'s `longphase_sv_ch`)
+- **out**: `tuple val(sampleID), path("*.straglr.haplotagged.tsv")` → `straglr_haplotagged_ch`
+
 ### `SPECTRE` — `modules/spectre/main.nf`
-CNV calling: `mosdepth` coverage windows fed into `spectre CNVCaller`.
+CNV calling: `mosdepth` coverage windows fed into `spectre CNVCaller`. Normalizes whatever
+`spectre CNVCaller` names its own output files (varies by version/compression state) into three
+predictable emits.
 - **in**: `tuple val(sampleID), val(bam), val(bai)`, `tuple val(ref_fa), val(ref_fai)`
-- **out**: `tuple val(sampleID), path("*.spectre.*")` → `spectre_cnv_ch`; mosdepth regions bed
+- **out**: `tuple val(sampleID), path("*.spectre.vcf.gz"), path("*.spectre.vcf.gz.tbi")` → `spectre_vcf_ch`;
+  `tuple val(sampleID), path("*.spectre.bed.gz"), path("*.spectre.bed.gz.tbi")` → `spectre_bed_ch`;
+  `tuple val(sampleID), path("*.spectre.spc")` → `spectre_spc_ch`; plus mosdepth regions bed
+
+### `HAPLOTYPE_ANNOTATE_SPECTRE` — `modules/haplotype_annotate/main.nf`
+Same rationale/mechanism as `HAPLOTYPE_ANNOTATE_STRAGLR` above, applied to Spectre's CNV segments (flank
+around each segment's start/end, not the whole span — CNV calls can be 100kb-2Mb, and boundary-flanking
+reads are what's actually informative about haplotype).
+- **in**: `tuple val(sampleID), path(bed_gz), path(bed_gz_tbi), path(bam), path(bai)` — `spectre_bed_ch`
+  joined with the final haplotagged bam
+- **out**: `tuple val(sampleID), path("*.spectre.haplotagged.bed.gz"), path("*.spectre.haplotagged.bed.gz.tbi")` → `spectre_haplotagged_ch`
 
 ### `PARAPHASE` — `modules/paraphase/main.nf`
 Segmental-duplication region reconstruction (e.g. SMN1/SMN2) via `paraphase`, restricted to

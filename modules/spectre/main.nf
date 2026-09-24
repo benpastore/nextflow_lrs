@@ -44,9 +44,14 @@ process SPECTRE {
     # and may or may not index) -- find whatever it actually wrote and
     # normalize to *.spectre.vcf.gz(+.tbi)/*.spectre.bed.gz(+.tbi)/*.spectre.spc
     # rather than assuming a fixed shape.
+    # strip the "./" find prefixes off -- otherwise "./foo" vs "foo" never
+    # compares equal below, and mv refuses a same-file no-op rename (exit 1)
     SPECTRE_VCF=\$(find . -maxdepth 1 \\( -name "*.vcf" -o -name "*.vcf.gz" \\) | head -n 1)
+    SPECTRE_VCF=\${SPECTRE_VCF#./}
     SPECTRE_BED=\$(find . -maxdepth 1 \\( -name "*.bed" -o -name "*.bed.gz" \\) -not -name "*mosdepth*" | head -n 1)
+    SPECTRE_BED=\${SPECTRE_BED#./}
     SPECTRE_SPC=\$(find . -maxdepth 1 -name "*.spc" | head -n 1)
+    SPECTRE_SPC=\${SPECTRE_SPC#./}
 
     if [[ "\$SPECTRE_VCF" == *.gz ]]; then
         [ "\$SPECTRE_VCF" = "\${name}.spectre.vcf.gz" ] || mv "\$SPECTRE_VCF" \${name}.spectre.vcf.gz
