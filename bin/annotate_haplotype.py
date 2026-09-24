@@ -25,26 +25,49 @@ appended (HP1 / HP2 / AMBIGUOUS).
 """
 
 import argparse
+import re
 import subprocess
+import sys
+
+HP_TAG_RE = re.compile(r"(?:^|\t)HP:i:([12])(?:\t|$)")
 
 
-def count_hp_reads(bam, chrom, pos, flank, hp_value):
+def count_hp_reads(bam, chrom, pos, flank):
+    """Return (hp1_count, hp2_count) among reads overlapping pos +/- flank.
+
+    Parses the HP:i:1/HP:i:2 optional field from plain `samtools view`
+    output rather than using `-d TAG:VALUE` (samtools >=1.10 only -- the
+    rnaseq container's samtools predates it and doesn't have the flag).
+    """
     start = max(1, pos - flank)
     end = pos + flank
     region = f"{chrom}:{start}-{end}"
-    # capture_output=/text= need Python >=3.7 -- the rnaseq container's
-    # `rnaseq` conda env runs 3.6, so use the equivalent stdout/stderr pipes.
+    # stdout=/stderr=/universal_newlines= (not capture_output=/text=) --
+    # the rnaseq container's `rnaseq` conda env runs Python 3.6.
     result = subprocess.run(
-        ["samtools", "view", "-c", "-d", f"HP:{hp_value}", bam, region],
+        ["samtools", "view", bam, region],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        universal_newlines=True, check=True,
+        universal_newlines=True,
     )
-    return int(result.stdout.strip())
+    if result.returncode != 0:
+        sys.exit(f"samtools view failed on {bam} {region}:\n{result.stderr}")
+
+    hp1 = hp2 = 0
+    for line in result.stdout.splitlines():
+        m = HP_TAG_RE.search(line)
+        if m:
+            if m.group(1) == "1":
+                hp1 += 1
+            else:
+                hp2 += 1
+    return hp1, hp2
 
 
 def assign_haplotype(bam, chrom, start, end, flank, majority_ratio):
-    hp1 = count_hp_reads(bam, chrom, start, flank, 1) + count_hp_reads(bam, chrom, end, flank, 1)
-    hp2 = count_hp_reads(bam, chrom, start, flank, 2) + count_hp_reads(bam, chrom, end, flank, 2)
+    hp1_start, hp2_start = count_hp_reads(bam, chrom, start, flank)
+    hp1_end, hp2_end = count_hp_reads(bam, chrom, end, flank)
+    hp1 = hp1_start + hp1_end
+    hp2 = hp2_start + hp2_end
     total = hp1 + hp2
 
     if total == 0:
