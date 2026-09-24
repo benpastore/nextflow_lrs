@@ -266,16 +266,17 @@ workflow longphase_sv {
 
 include { SNIFFLES } from '../modules/sniffles/main.nf'
 include { INDEX_SNIFFLES_VCF } from '../modules/sniffles/main.nf'
-workflow sniffles { 
+workflow sniffles {
 
-    take : 
+    take :
         data
-        
-    main : 
-        SNIFFLES( data )
 
-    emit : 
-        sniffles_ch = SNIFFLES.out.sniffles_ch
+    main :
+        SNIFFLES( data )
+        INDEX_SNIFFLES_VCF( SNIFFLES.out.sniffles_raw_ch )
+
+    emit :
+        sniffles_ch = INDEX_SNIFFLES_VCF.out.sniffles_ch
 }
 
 include { SPECTRE } from '../modules/spectre/main.nf'
