@@ -12,6 +12,7 @@ process CONSOLIDATE_VARIANTS {
             val(sniffles_vcf),
             val(dipcall_vcf),
             val(hapdiff_vcf)
+        path(script)
 
     output:
         tuple val(sampleID), path("*.master.vcf"), emit: consolidated_ch
@@ -28,7 +29,7 @@ process CONSOLIDATE_VARIANTS {
     source activate rnaseq
     set -u
 
-    python3 ${params.bin}/consolidate_variants.py \\
+    python3 ${script} \\
         --sample ${sampleID} \\
         --caller clair3_longphase:alignment:${clair3_longphase_vcf} \\
         --caller sniffles:alignment:${sniffles_vcf} \\

@@ -34,7 +34,6 @@ import bisect
 import gzip
 import json
 import logging
-import colorlog
 import os
 import pickle
 import time
@@ -44,25 +43,38 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+try:
+    import colorlog
+except ImportError:
+    colorlog = None
+
 timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
 
-# Configure logging
+# Configure logging -- colorlog is a nice-to-have (not every environment
+# this runs in has it, e.g. the rnaseq container); fall back to plain
+# logging rather than failing outright.
 level = "INFO"
 logger = logging.getLogger("color_logger")
 
 if not logger.handlers:
-    handler = colorlog.StreamHandler()
-    handler.setFormatter(colorlog.ColoredFormatter(
-        "%(asctime)s - %(log_color)s%(levelname)s:%(reset)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        log_colors={
-            'DEBUG': 'blue',
-            'INFO': 'green',
-            'WARNING': 'yellow',
-            'ERROR': 'red',
-            'CRITICAL': 'bold_red',
-        }
-    ))
+    if colorlog is not None:
+        handler = colorlog.StreamHandler()
+        handler.setFormatter(colorlog.ColoredFormatter(
+            "%(asctime)s - %(log_color)s%(levelname)s:%(reset)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            log_colors={
+                'DEBUG': 'blue',
+                'INFO': 'green',
+                'WARNING': 'yellow',
+                'ERROR': 'red',
+                'CRITICAL': 'bold_red',
+            }
+        ))
+    else:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s - %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        ))
     logger.addHandler(handler)
     logger.setLevel(getattr(logging, level, logging.INFO))
 

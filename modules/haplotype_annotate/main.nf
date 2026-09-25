@@ -19,6 +19,7 @@ process HAPLOTYPE_ANNOTATE_STRAGLR {
 
     input:
         tuple val(sampleID), path(tsv), path(bed), path(bam), path(bai)
+        path(script)
 
     output:
         tuple val(sampleID), path("*.straglr.haplotagged.tsv"), emit: straglr_haplotagged_ch
@@ -34,7 +35,7 @@ process HAPLOTYPE_ANNOTATE_STRAGLR {
 
     name=\$(basename ${tsv} .straglr.tsv)
 
-    python3 ${params.bin}/annotate_haplotype.py \\
+    python3 ${script} \\
         --bam ${bam} \\
         --calls ${tsv} \\
         --mode straglr \\
@@ -50,6 +51,7 @@ process HAPLOTYPE_ANNOTATE_SPECTRE {
 
     input:
         tuple val(sampleID), path(bed_gz), path(bed_gz_tbi), path(bam), path(bai)
+        path(script)
 
     output:
         tuple val(sampleID), path("*.spectre.haplotagged.bed"), emit: spectre_haplotagged_raw_ch
@@ -67,7 +69,7 @@ process HAPLOTYPE_ANNOTATE_SPECTRE {
 
     zcat ${bed_gz} > \${name}.spectre.bed
 
-    python3 ${params.bin}/annotate_haplotype.py \\
+    python3 ${script} \\
         --bam ${bam} \\
         --calls \${name}.spectre.bed \\
         --mode spectre \\

@@ -319,7 +319,10 @@ workflow haplotype_annotate_straglr {
         data // sampleID, tsv, bed, bam, bai
 
     main :
-        HAPLOTYPE_ANNOTATE_STRAGLR( data )
+        // see the same rationale comment in the consolidate_variants
+        // subworkflow above -- explicit path input so script edits
+        // invalidate -resume's cache.
+        HAPLOTYPE_ANNOTATE_STRAGLR( data, file("${params.bin}/annotate_haplotype.py") )
 
     emit :
         straglr_haplotagged_ch = HAPLOTYPE_ANNOTATE_STRAGLR.out.straglr_haplotagged_ch
@@ -331,7 +334,7 @@ workflow haplotype_annotate_spectre {
         data // sampleID, bed_gz, bed_gz_tbi, bam, bai
 
     main :
-        HAPLOTYPE_ANNOTATE_SPECTRE( data )
+        HAPLOTYPE_ANNOTATE_SPECTRE( data, file("${params.bin}/annotate_haplotype.py") )
         INDEX_SPECTRE_HAPLOTAGGED_BED( HAPLOTYPE_ANNOTATE_SPECTRE.out.spectre_haplotagged_raw_ch )
 
     emit :
@@ -423,7 +426,12 @@ workflow consolidate_variants {
         data
 
     main :
-        CONSOLIDATE_VARIANTS( data )
+        // declared as an explicit path input (not just interpolated via
+        // params.bin inside the script block) so editing this script
+        // invalidates -resume's cache -- a full-path `python3 <path>`
+        // invocation, unlike a bare command name, isn't auto-tracked by
+        // Nextflow's implicit bin/ hashing.
+        CONSOLIDATE_VARIANTS( data, file("${params.bin}/consolidate_variants.py") )
 
     emit :
         consolidated_ch = CONSOLIDATE_VARIANTS.out.consolidated_ch
@@ -467,7 +475,7 @@ workflow recessive_modifier {
         vcfs           // collected list of every sample's snpeff vcf (staged alongside the manifest)
 
     main :
-        RECESSIVE_MODIFIER( family_json, vcf_manifest, vcfs )
+        RECESSIVE_MODIFIER( family_json, vcf_manifest, vcfs, file("${params.bin}/recessive_modifier_consolidated.py") )
 
     emit :
         recessive_modifier_ch = RECESSIVE_MODIFIER.out.recessive_modifier_ch

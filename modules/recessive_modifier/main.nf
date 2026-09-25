@@ -14,6 +14,7 @@ process RECESSIVE_MODIFIER {
         path(family_json)
         path(vcf_manifest)
         path(vcfs)
+        path(script)
 
     output:
         path("*.recessive_modifier.tsv"), emit: recessive_modifier_ch
@@ -27,7 +28,7 @@ process RECESSIVE_MODIFIER {
     source activate rnaseq
     set -u
 
-    python3 ${params.bin}/recessive_modifier_consolidated.py \\
+    python3 ${script} \\
         -family_json ${family_json} \\
         -vcf_manifest ${vcf_manifest} \\
         -sv_merge_dist ${params.recessive_modifier_sv_merge_dist ?: 500} \\
