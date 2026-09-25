@@ -1,10 +1,12 @@
 { 
     "A_severe112" : {
         "father" : "A_parent110",
-        "mother" : "A_parent111"
+        "mother" : "A_parent111",
+        "phenotype" : "severe"
     },
     "A_mild113" : {
         "father" : "A_parent110",
-        "mother" : "A_parent111"
+        "mother" : "A_parent111",
+        "phenotype" : "mild"
     }
 }

@@ -63,6 +63,12 @@ def parse_caller_arg(arg):
 
 SVTYPE_RE = re.compile(r"(?:^|;)SVTYPE=([^;]+)")
 END_RE = re.compile(r"(?:^|;)END=(-?[0-9]+)")
+# Sniffles --phase writes its phase-block id to INFO/PHASE, not FORMAT/PS:
+# PHASE=<hp>,<phaseset>,<nSupportingReads>,<nTotalReads>,<qcHP>,<qcPhaseset>
+# e.g. PHASE=1,1363,4,4,PASS,PASS -- phaseset "1363" is the same block id a
+# read-based phaser like longphase would report as Clair3's PS for the same
+# region. Only trust it when Sniffles' own phaseset QC flag (index 5) says PASS.
+PHASE_RE = re.compile(r"(?:^|;)PHASE=([^;]+)")
 
 
 def parse_vcf(path, caller):
@@ -85,6 +91,13 @@ def parse_vcf(path, caller):
                 d = dict(zip(keys, vals))
                 gt = d.get("GT", "")
                 ps = d.get("PS", "")
+
+            if not ps:
+                m = PHASE_RE.search(info)
+                if m:
+                    phase_fields = m.group(1).split(",")
+                    if len(phase_fields) >= 6 and phase_fields[5] == "PASS" and phase_fields[1] not in ("", "NULL"):
+                        ps = phase_fields[1]
 
             m = SVTYPE_RE.search(info)
             svtype = m.group(1) if m else None

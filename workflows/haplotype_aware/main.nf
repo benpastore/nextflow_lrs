@@ -154,6 +154,7 @@ include { genome_stats } from '../../subworkflows/ont.nf'
 include { chrom_coverage } from '../../subworkflows/ont.nf'
 include { consolidate_variants } from '../../subworkflows/ont.nf'
 include { snpeff } from '../../subworkflows/ont.nf'
+include { recessive_modifier } from '../../subworkflows/ont.nf'
 include { alphagenome } from '../../subworkflows/ont.nf'
 
 include { herro_correction } from '../../subworkflows/herro.nf'
@@ -518,6 +519,24 @@ workflow {
             if (!params.snpeff_data_dir) { exit 1, 'params.snpeff_data_dir not set!' }
 
             snpeff( consolidate_variants.out.consolidated_ch, ch_genome, params.snpeff_gtf ? file(params.snpeff_gtf, checkIfExists: true) : file("NO_FILE") )
+
+            ////////////////// RECESSIVE-MODIFIER CANDIDATE SEARCH /////////////////////
+            // Cohort-wide (not per-sample) -- mild/severe sibling groupings are
+            // derived from family.json's "phenotype" field (a field run_trio's
+            // own family.json use above doesn't touch), and compound-het
+            // candidates are confirmed in trans via each variant's own calling
+            // caller's phase evidence. See bin/recessive_modifier_consolidated.py.
+            if (params.family_json) {
+                vcf_manifest_ch = snpeff.out.snpeff_vcf_ch
+                    .map { sampleID, vcf -> "${sampleID}\t${vcf.name}" }
+                    .collectFile(name: 'vcf_manifest.tsv', newLine: true, sort: true)
+
+                vcfs_ch = snpeff.out.snpeff_vcf_ch
+                    .map { sampleID, vcf -> vcf }
+                    .collect()
+
+                recessive_modifier( file(params.family_json), vcf_manifest_ch, vcfs_ch )
+            }
         }
 
         ////////////////// TRIO-AWARE PEDIGREE PHASING (children only) /////////////////////

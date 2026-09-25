@@ -458,6 +458,21 @@ workflow snpeff {
         snpeff_stats_ch = SNPEFF.out.snpeff_stats_ch
 }
 
+include { RECESSIVE_MODIFIER } from '../modules/recessive_modifier/main.nf'
+workflow recessive_modifier {
+
+    take :
+        family_json    // path to family.json
+        vcf_manifest   // path: sampleID<TAB>snpeff_vcf_path, one per sample
+        vcfs           // collected list of every sample's snpeff vcf (staged alongside the manifest)
+
+    main :
+        RECESSIVE_MODIFIER( family_json, vcf_manifest, vcfs )
+
+    emit :
+        recessive_modifier_ch = RECESSIVE_MODIFIER.out.recessive_modifier_ch
+}
+
 include { ALPHAGENOME } from '../modules/alphagenome/main.nf'
 workflow alphagenome {
 
