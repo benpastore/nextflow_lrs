@@ -48,9 +48,14 @@ process SNPEFF {
 
     output:
         tuple val(sampleID), path("${sampleID}.snpeff.vcf"), emit: snpeff_vcf_ch
-        tuple val(sampleID), path("${sampleID}.snpeff.csv"), path("${sampleID}.snpeff.html"), emit: snpeff_stats_ch
+        tuple val(sampleID), path("${sampleID}.snpeff.csv"), path("${sampleID}.snpeff.html"), optional: true, emit: snpeff_stats_ch
 
     script:
+    // -t (multi-threaded annotation) implies -noStats, so only take the
+    // csvStats/htmlStats path when stats were explicitly requested.
+    def stats = params.snpeff_stats \
+        ? "-csvStats ${sampleID}.snpeff.csv -htmlStats ${sampleID}.snpeff.html" \
+        : "-t -noStats"
     """
     #!/bin/bash
     set -euo pipefail
@@ -58,8 +63,7 @@ process SNPEFF {
     snpEff -Xmx${params.snpeff_java_mem} \\
         -dataDir \$(pwd) \\
         -configOption ${params.snpeff_db}.genome=${params.snpeff_db} \\
-        -csvStats ${sampleID}.snpeff.csv \\
-        -htmlStats ${sampleID}.snpeff.html \\
+        ${stats} \\
         ${params.snpeff_args ?: ''} \\
         ${params.snpeff_db} \\
         ${vcf} \\
