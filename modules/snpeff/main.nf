@@ -51,11 +51,11 @@ process SNPEFF {
         tuple val(sampleID), path("${sampleID}.snpeff.csv"), path("${sampleID}.snpeff.html"), optional: true, emit: snpeff_stats_ch
 
     script:
-    // -t (multi-threaded annotation) implies -noStats, so only take the
-    // csvStats/htmlStats path when stats were explicitly requested.
+    // snpEff 5.2 has no multi-threading flag -- annotation itself is
+    // single-threaded regardless of cpus allocated to this process.
     def stats = params.snpeff_stats \
         ? "-csvStats ${sampleID}.snpeff.csv -htmlStats ${sampleID}.snpeff.html" \
-        : "-t -noStats"
+        : "-noStats"
     """
     #!/bin/bash
     set -euo pipefail
