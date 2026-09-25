@@ -71,6 +71,27 @@ END_RE = re.compile(r"(?:^|;)END=(-?[0-9]+)")
 PHASE_RE = re.compile(r"(?:^|;)PHASE=([^;]+)")
 
 
+def remap_gt_for_allele(gt, allele_idx):
+    """Remap a multiallelic GT onto one split-out ALT allele: the given
+    1-based allele index becomes '1' (this record's only ALT); any other
+    non-ref allele index becomes '0' (it isn't this record's ALT, and
+    isn't ref either, but a single-ALT record has no way to represent a
+    third allele -- same lossy convention bcftools norm -m- uses)."""
+    if not gt or set(gt) <= {"."} or gt in (".", "./.", ".|."):
+        return gt
+    sep = "|" if "|" in gt else "/"
+    alleles = gt.replace("|", "/").split("/")
+    remapped = []
+    for a in alleles:
+        if a == "." or a == "0":
+            remapped.append(a)
+        elif a == str(allele_idx):
+            remapped.append("1")
+        else:
+            remapped.append("0")
+    return sep.join(remapped)
+
+
 def parse_vcf(path, caller):
     """Yield one dict per ALT allele in the VCF."""
     records = []
@@ -104,9 +125,9 @@ def parse_vcf(path, caller):
             m = END_RE.search(info)
             end = int(m.group(1)) if m else None
 
-            for a in alt.split(","):
-                if a in (".", ""):
-                    continue
+            alt_alleles = [a for a in alt.split(",") if a not in (".", "")]
+            multiallelic = len(alt_alleles) > 1
+            for i, a in enumerate(alt_alleles, start=1):
                 records.append(
                     {
                         "chrom": chrom,
@@ -116,7 +137,7 @@ def parse_vcf(path, caller):
                         "qual": qual,
                         "filter": filt,
                         "caller": caller,
-                        "gt": gt,
+                        "gt": remap_gt_for_allele(gt, i) if multiallelic else gt,
                         "ps": ps,
                         "svtype": svtype,
                         "end": end,
