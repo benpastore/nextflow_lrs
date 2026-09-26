@@ -572,13 +572,17 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
 
     logger.info(f"\nCandidate variants across all mild samples (pre multi-sample filter): {len(all_passing)}")
 
-    # Phase 2: require recurrence across >=2 independent mild samples --
-    # either the same variant, or (for compound-het) >=2 samples each
-    # showing a qualifying trans pattern in the same gene.
+    # Phase 2: require recurrence across >=min_occurrence independent mild
+    # samples -- either the same variant (homozygous), or (for compound-het)
+    # >=min_occurrence samples each showing a qualifying trans pattern in
+    # the same gene. Both branches use the same threshold now -- previously
+    # the homozygous branch hardcoded >=2 regardless of -min_occurrence,
+    # which meant a cohort with a single mild sample could never report any
+    # homozygous candidate no matter how real the finding was.
     final_pass = {}
     for key, info in all_passing.items():
         if info["reason"] == "homozygous":
-            if len(info["samples"]) >= 2:
+            if len(info["samples"]) >= min_occurrence:
                 final_pass[key] = info
         else:
             if len(gene_to_samples[info["gene"]]) >= min_occurrence:
