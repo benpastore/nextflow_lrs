@@ -319,7 +319,10 @@ def parse_consolidated_vcf(path):
                 "ref": ref,
                 "alt": alt,
                 "svtype": svtype,
-                "ann": filtered_ann,
+                # filtered_ann itself is never read past this point -- only
+                # the gene set it collapses to below is used downstream, so
+                # don't hold onto the (potentially large, one-entry-per-
+                # transcript) parsed ANN block for every kept variant.
                 "genes": genes,
                 "caller": chosen,
                 "callers_all": callers_present,
@@ -443,22 +446,54 @@ def load_family_groups(family_json_path):
                           child sharing its (father, mother)
       concordant_severe: list of severe sampleIDs whose family has no mild
                           child (background filtering cohort, same role as
-                          recessive_modifier_ont.py's -concordant list)
+                          recessive_modifier_ont.py's -concordant list) --
+                          also where a child with no father/mother in
+                          family.json lands if it's severe (see below)
+
+    A child missing father and/or mother in family.json never participates
+    in the (father, mother) grouping below -- without both, there's no
+    genuine trio/sibling relationship to establish, and keying on a
+    missing value (e.g. both absent -> key (None, None)) would silently
+    treat unrelated no-parent children as siblings of each other. Instead:
+      - severe with no parents -> added directly to concordant_severe
+        (its role there, filtering background evidence, needs no sibling
+        relationship, so this is a safe default, not a loss of signal)
+      - mild with no parents -> skipped entirely (no severe sibling can be
+        established, so no trio comparison is possible for it); logged as
+        a warning since this silently drops that sample from the search
     """
     with open(family_json_path) as f:
         families = json.load(f)
 
     by_parents = defaultdict(lambda: {"mild": [], "severe": []})
+    concordant_severe = []
     for child, info in families.items():
         phenotype = info.get("phenotype")
         if phenotype not in ("mild", "severe"):
             logger.warning(f"{child}: phenotype '{phenotype}' is neither 'mild' nor 'severe', skipping")
             continue
-        key = (info.get("father"), info.get("mother"))
-        by_parents[key][phenotype].append(child)
+
+        father = info.get("father")
+        mother = info.get("mother")
+        if not father or not mother:
+            if phenotype == "severe":
+                logger.info(
+                    f"{child}: no father/mother in family.json -- adding "
+                    f"directly to concordant-severe background (bypassing "
+                    f"trio/sibling grouping)"
+                )
+                concordant_severe.append(child)
+            else:
+                logger.warning(
+                    f"{child}: mild phenotype with no father/mother in "
+                    f"family.json -- cannot establish a severe sibling to "
+                    f"compare against, skipping (no trio analysis possible)"
+                )
+            continue
+
+        by_parents[(father, mother)][phenotype].append(child)
 
     discordant_groups = []
-    concordant_severe = []
     for (father, mother), grp in by_parents.items():
         if grp["mild"] and grp["severe"]:
             for mild in grp["mild"]:

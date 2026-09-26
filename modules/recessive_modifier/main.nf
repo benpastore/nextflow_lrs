@@ -7,7 +7,7 @@
 
 process RECESSIVE_MODIFIER {
 
-    label 'low'
+    label 'recessive_modifier'
     publishDir "${params.results}/06_variants/recessive_modifier", mode: params.publish_mode
 
     input:
