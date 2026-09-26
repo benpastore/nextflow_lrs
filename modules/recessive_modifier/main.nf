@@ -18,6 +18,7 @@ process RECESSIVE_MODIFIER {
 
     output:
         path("*.recessive_modifier.tsv"), emit: recessive_modifier_ch
+        path("*.recessive_modifier.gene_summary.tsv"), emit: recessive_modifier_gene_summary_ch
 
     script:
     """

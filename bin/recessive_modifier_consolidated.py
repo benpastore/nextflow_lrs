@@ -442,6 +442,31 @@ def evaluate_mild_sample(records, small_keys, sv_positions, sv_merge_dist):
     return passing
 
 
+def severe_qualifying_genes(severe_records_list, sv_merge_dist):
+    """
+    Genes where >=1 severe sample itself carries the recessive model's own
+    qualifying pattern -- homozygous, or a compound-het pair confirmed in
+    trans -- evaluated with no exclusion (severe isn't being filtered
+    against anything here, just characterized on its own terms; passing
+    small_keys=set() and sv_positions={} to evaluate_mild_sample means its
+    in_severe() check is trivially False for every variant, so nothing is
+    dropped before the homo/compound-het logic runs).
+
+    Used to drop an entire gene from a mild sample's candidates when severe
+    itself is also biallelically disrupted there -- even via a *different*
+    specific variant than mild's. A true recessive model: if the severe
+    sibling already carries a qualifying hit in this gene, that gene can't
+    be what's differentiating mild from severe, so exact-variant matching
+    alone (in_severe/build_severe_index above) isn't enough -- this closes
+    that gap at the gene level.
+    """
+    genes = set()
+    for records in severe_records_list:
+        passing = evaluate_mild_sample(records, set(), {}, sv_merge_dist)
+        genes.update(info["gene"] for info in passing.values())
+    return genes
+
+
 def load_family_groups(family_json_path):
     """
     Parse family.json ({child: {father, mother, phenotype}}) into:
@@ -560,6 +585,16 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
         small_keys, sv_positions = build_severe_index(severe_records)
 
         passing = evaluate_mild_sample(mild_records, small_keys, sv_positions, sv_merge_dist)
+
+        excluded_genes = severe_qualifying_genes(severe_records, sv_merge_dist)
+        if excluded_genes:
+            before = len(passing)
+            passing = {k: v for k, v in passing.items() if v["gene"] not in excluded_genes}
+            dropped = before - len(passing)
+            if dropped:
+                logger.info(f"{mild}: dropped {dropped} candidate(s) in {len(excluded_genes)} gene(s) "
+                            f"also qualifying (homo/compound-het-trans) in severe")
+
         logger.info(f"{mild} (vs {', '.join(severes)} + {len(concordant_severe)} concordant-severe): "
                     f"{len(passing)} candidate variants")
 
@@ -592,10 +627,12 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
 
     if not final_pass:
         logger.warning("No variants passed filtering - returning empty results table")
-        return pd.DataFrame(columns=[
+        empty_variants = pd.DataFrame(columns=[
             "#CHROM", "POS", "ID", "REF", "ALT", "gene", "zygosity", "reason",
             "evidence_caller", "callers_detected", "GT", "PS", "samples", "N_samples", "gnomad_AF_NFE"
         ])
+        empty_genes = pd.DataFrame(columns=["gene", "N_sibs_with_variant", "N_homo_sibs", "N_compound_het_sibs", "samples"])
+        return empty_variants, empty_genes
 
     var_id_to_af = {}
     if gnomad_annotator is not None:
@@ -608,6 +645,8 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
             var_id_to_af[key] = results.get(f"{chrom}:{pos}:{ref}>{alt}")
 
     rows = []
+    gene_homo_samples = defaultdict(set)
+    gene_comphet_samples = defaultdict(set)
     for key, info in final_pass.items():
         vid, gene = key
         rec = info["rec"]
@@ -628,6 +667,10 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
             "N_samples": len(info["samples"]),
             "gnomad_AF_NFE": var_id_to_af.get(key),
         })
+        if info["reason"] == "homozygous":
+            gene_homo_samples[gene].update(info["samples"])
+        else:
+            gene_comphet_samples[gene].update(info["samples"])
 
     final_df = pd.DataFrame(rows).sort_values(["#CHROM", "POS"]).reset_index(drop=True)
 
@@ -640,7 +683,28 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
     logger.info(f"Unique genes: {final_df['gene'].nunique()}")
     logger.info(f"{'='*60}\n")
 
-    return final_df
+    # Per-gene summary: how many independent mild sibs carry a qualifying
+    # variant (homo and/or compound-het-trans) in each gene -- a sib
+    # counts once per gene even if it has multiple qualifying variants
+    # there, and once even if it qualifies via both homo and compound-het.
+    gene_summary_rows = []
+    all_genes = set(gene_homo_samples) | set(gene_comphet_samples)
+    for gene in all_genes:
+        homo_samples = gene_homo_samples[gene]
+        comphet_samples = gene_comphet_samples[gene]
+        all_samples = homo_samples | comphet_samples
+        gene_summary_rows.append({
+            "gene": gene,
+            "N_sibs_with_variant": len(all_samples),
+            "N_homo_sibs": len(homo_samples),
+            "N_compound_het_sibs": len(comphet_samples),
+            "samples": ",".join(sorted(all_samples)),
+        })
+    gene_summary_df = pd.DataFrame(gene_summary_rows).sort_values(
+        ["N_sibs_with_variant", "gene"], ascending=[False, True]
+    ).reset_index(drop=True)
+
+    return final_df, gene_summary_df
 
 
 def get_args():
@@ -673,11 +737,15 @@ def main():
     if args.gnomad_chm13_vcf:
         gnomad_annotator = GnomadNFEAnnotator(args.gnomad_chm13_vcf)
 
-    res = run(discordant_groups, concordant_severe, manifest, args.sv_merge_dist, gnomad_annotator, args.min_occurrence)
+    res, gene_summary = run(discordant_groups, concordant_severe, manifest, args.sv_merge_dist, gnomad_annotator, args.min_occurrence)
 
     output_file = args.output or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_recessive_modifier_consolidated.tsv"
     res.to_csv(output_file, index=False, sep="\t", header=True)
     logger.info(f"\nResults saved to: {output_file}")
+
+    gene_summary_file = output_file.rsplit(".", 1)[0] + ".gene_summary.tsv"
+    gene_summary.to_csv(gene_summary_file, index=False, sep="\t", header=True)
+    logger.info(f"Gene summary saved to: {gene_summary_file}")
 
 
 if __name__ == "__main__":

@@ -479,6 +479,7 @@ workflow recessive_modifier {
 
     emit :
         recessive_modifier_ch = RECESSIVE_MODIFIER.out.recessive_modifier_ch
+        recessive_modifier_gene_summary_ch = RECESSIVE_MODIFIER.out.recessive_modifier_gene_summary_ch
 }
 
 include { ALPHAGENOME } from '../modules/alphagenome/main.nf'
