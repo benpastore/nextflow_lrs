@@ -374,9 +374,13 @@ def evaluate_mild_sample(records, small_keys, sv_positions, sv_merge_dist):
     """
     Apply the recessive model to one mild sample's variant set.
 
-    Returns {var_id: {"reason":..., "gene":...}} for variants that pass:
-    homozygous (not in severe), or heterozygous with a confirmed-trans
-    compound-het partner in the same gene (not in severe).
+    Returns {(var_id, gene): {"reason":..., "gene":..., "rec":...}} for
+    variants that pass: homozygous (not in severe), or heterozygous with a
+    confirmed-trans compound-het partner in the same gene (not in severe).
+    Keyed by (var_id, gene) rather than var_id alone so a variant spanning
+    multiple genes (e.g. upstream/downstream of two neighboring genes, or a
+    genuinely overlapping gene pair) gets a separate passing entry per gene
+    instead of silently collapsing onto just one.
     """
     surviving = {
         vid: rec for vid, rec in records.items()
@@ -388,7 +392,7 @@ def evaluate_mild_sample(records, small_keys, sv_positions, sv_merge_dist):
     for vid, rec in surviving.items():
         if rec["zygosity"] == "homo":
             for gene in rec["genes"]:
-                passing[vid] = {"reason": "homozygous", "gene": gene, "rec": rec}
+                passing[(vid, gene)] = {"reason": "homozygous", "gene": gene, "rec": rec}
 
     het_by_gene = defaultdict(list)
     for vid, rec in surviving.items():
@@ -416,10 +420,10 @@ def evaluate_mild_sample(records, small_keys, sv_positions, sv_merge_dist):
                     vid1, rec1 = group[i]
                     vid2, rec2 = group[j]
                     if alt_hap_index(rec1["gt"]) != alt_hap_index(rec2["gt"]):
-                        passing.setdefault(vid1, {
+                        passing.setdefault((vid1, gene), {
                             "reason": f"compound_het_trans:PS={ps},partner={vid2}", "gene": gene, "rec": rec1
                         })
-                        passing.setdefault(vid2, {
+                        passing.setdefault((vid2, gene), {
                             "reason": f"compound_het_trans:PS={ps},partner={vid1}", "gene": gene, "rec": rec2
                         })
 
@@ -428,10 +432,10 @@ def evaluate_mild_sample(records, small_keys, sv_positions, sv_merge_dist):
                 vid1, rec1 = asm[i]
                 vid2, rec2 = asm[j]
                 if alt_hap_index(rec1["gt"]) != alt_hap_index(rec2["gt"]):
-                    passing.setdefault(vid1, {
+                    passing.setdefault((vid1, gene), {
                         "reason": f"compound_het_trans:assembly,partner={vid2}", "gene": gene, "rec": rec1
                     })
-                    passing.setdefault(vid2, {
+                    passing.setdefault((vid2, gene), {
                         "reason": f"compound_het_trans:assembly,partner={vid1}", "gene": gene, "rec": rec2
                     })
 
@@ -525,7 +529,7 @@ def load_vcf_manifest(path):
 
 
 @timing
-def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_annotator=None):
+def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_annotator=None, min_occurrence=2):
     logger.info(f"\n{'='*60}")
     logger.info(f"Discordant mild/severe groups: {len(discordant_groups)}")
     logger.info(f"Concordant-severe background samples: {len(concordant_severe)}")
@@ -545,10 +549,10 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
     concordant_records = [get_records(s) for s in concordant_severe]
 
     # Phase 1: per-mild-sample evaluation
-    variant_sample_map = defaultdict(set)     # var_id -> set of mild sampleIDs where it passed
+    variant_sample_map = defaultdict(set)     # (var_id, gene) -> set of mild sampleIDs where it passed
     gene_sample_map = defaultdict(set)        # (mild_sample, gene) already tracked implicitly via variant_sample_map
     gene_to_samples = defaultdict(set)        # gene -> set of mild sampleIDs with ANY qualifying pattern in it
-    all_passing = {}                          # var_id -> {reason, gene, rec, samples:set}
+    all_passing = {}                          # (var_id, gene) -> {reason, gene, rec, samples:set}
 
     for mild, severes in discordant_groups:
         mild_records = get_records(mild)
@@ -559,12 +563,12 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
         logger.info(f"{mild} (vs {', '.join(severes)} + {len(concordant_severe)} concordant-severe): "
                     f"{len(passing)} candidate variants")
 
-        for vid, info in passing.items():
-            variant_sample_map[vid].add(mild)
+        for key, info in passing.items():
+            variant_sample_map[key].add(mild)
             gene_to_samples[info["gene"]].add(mild)
-            if vid not in all_passing:
-                all_passing[vid] = {"reason": info["reason"], "gene": info["gene"], "rec": info["rec"], "samples": set()}
-            all_passing[vid]["samples"].add(mild)
+            if key not in all_passing:
+                all_passing[key] = {"reason": info["reason"], "gene": info["gene"], "rec": info["rec"], "samples": set()}
+            all_passing[key]["samples"].add(mild)
 
     logger.info(f"\nCandidate variants across all mild samples (pre multi-sample filter): {len(all_passing)}")
 
@@ -572,15 +576,15 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
     # either the same variant, or (for compound-het) >=2 samples each
     # showing a qualifying trans pattern in the same gene.
     final_pass = {}
-    for vid, info in all_passing.items():
+    for key, info in all_passing.items():
         if info["reason"] == "homozygous":
             if len(info["samples"]) >= 2:
-                final_pass[vid] = info
+                final_pass[key] = info
         else:
-            if len(gene_to_samples[info["gene"]]) >= 2:
-                final_pass[vid] = info
+            if len(gene_to_samples[info["gene"]]) >= min_occurrence:
+                final_pass[key] = info
 
-    logger.info(f"After multi-sample recurrence filter (>=2 independent mild samples): {len(final_pass)}")
+    logger.info(f"After multi-sample recurrence filter (>={min_occurrence} independent mild samples): {len(final_pass)}")
 
     if not final_pass:
         logger.warning("No variants passed filtering - returning empty results table")
@@ -593,14 +597,15 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
     if gnomad_annotator is not None:
         logger.info("Annotating passing variants with gnomAD AF_nfe...")
         gnomad_annotator.load()
-        batch = [(vid, info["rec"]["chrom"], info["rec"]["pos"], info["rec"]["ref"], info["rec"]["alt"])
-                 for vid, info in final_pass.items()]
+        batch = [(key, info["rec"]["chrom"], info["rec"]["pos"], info["rec"]["ref"], info["rec"]["alt"])
+                 for key, info in final_pass.items()]
         results = gnomad_annotator.annotate_batch([(c, p, r, a) for _, c, p, r, a in batch])
-        for vid, chrom, pos, ref, alt in batch:
-            var_id_to_af[vid] = results.get(f"{chrom}:{pos}:{ref}>{alt}")
+        for key, chrom, pos, ref, alt in batch:
+            var_id_to_af[key] = results.get(f"{chrom}:{pos}:{ref}>{alt}")
 
     rows = []
-    for vid, info in final_pass.items():
+    for key, info in final_pass.items():
+        vid, gene = key
         rec = info["rec"]
         rows.append({
             "#CHROM": rec["chrom"],
@@ -608,7 +613,7 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
             "ID": vid,
             "REF": rec["ref"],
             "ALT": rec["alt"],
-            "gene": info["gene"],
+            "gene": gene,
             "zygosity": rec["zygosity"],
             "reason": info["reason"],
             "evidence_caller": rec["caller"],
@@ -617,7 +622,7 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
             "PS": rec["ps"],
             "samples": ",".join(sorted(info["samples"])),
             "N_samples": len(info["samples"]),
-            "gnomad_AF_NFE": var_id_to_af.get(vid),
+            "gnomad_AF_NFE": var_id_to_af.get(key),
         })
 
     final_df = pd.DataFrame(rows).sort_values(["#CHROM", "POS"]).reset_index(drop=True)
@@ -647,6 +652,8 @@ def get_args():
     parser.add_argument("-gnomad_chm13_vcf", type=str, default=None,
                          help="Optional gnomAD VCF already lifted onto CHM13 coordinates, for AF_nfe annotation of the final pass")
     parser.add_argument("-output", type=str, default=None)
+    parser.add_argument("-min_occurrence", type=int, default=1,
+                         help="Minimum number of independent mild samples a gene must appear in to pass the multi-sample recurrence filter")
     return parser.parse_args()
 
 
@@ -662,9 +669,9 @@ def main():
     if args.gnomad_chm13_vcf:
         gnomad_annotator = GnomadNFEAnnotator(args.gnomad_chm13_vcf)
 
-    res = run(discordant_groups, concordant_severe, manifest, args.sv_merge_dist, gnomad_annotator)
+    res = run(discordant_groups, concordant_severe, manifest, args.sv_merge_dist, gnomad_annotator, args.min_occurrence)
 
-    output_file = args.output or f"{timestamp}_recessive_modifier_consolidated.tsv"
+    output_file = args.output or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_recessive_modifier_consolidated.tsv"
     res.to_csv(output_file, index=False, sep="\t", header=True)
     logger.info(f"\nResults saved to: {output_file}")
 
