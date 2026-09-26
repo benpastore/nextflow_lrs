@@ -529,7 +529,7 @@ def load_vcf_manifest(path):
 
 
 @timing
-def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_annotator=None, min_occurrence=2):
+def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_annotator=None, min_occurrence=1):
     logger.info(f"\n{'='*60}")
     logger.info(f"Discordant mild/severe groups: {len(discordant_groups)}")
     logger.info(f"Concordant-severe background samples: {len(concordant_severe)}")
