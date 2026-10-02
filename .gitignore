@@ -2,7 +2,6 @@
 *.bw
 *.sam
 *results/*
-*.sbatch
 *.bai
 *.fq.gz
 *.fastq.gz
