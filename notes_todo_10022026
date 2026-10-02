@@ -1,0 +1,6 @@
+1. Annotate variants with AG and gnomAD freq
+2. Compare expansion repeat and CNV 
+3. start looking into pod5 methylation deteion and analysis (with dorado2)
+    - dorado thing that transfers the information over
+    - dorado align unalbam -> align bam (with methylation information) -> which genes have C methylation 
+4. create modified human reference blocking SMN1 region

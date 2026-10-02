@@ -64,15 +64,20 @@ def parse_vcf(path):
 
 
 # Ontology terms scored, in priority order -- motor neuron is the primary,
-# non-negotiable target for this SMA study; spinal cord / general neuron are
-# secondary context columns. Resolved against whatever CURIEs are actually
-# present in this AlphaGenome release via resolve_ontology_terms() below --
-# these are *labels* to search output_metadata for, not hardcoded CURIEs,
-# since the exact CURIE set can vary by release.
+# non-negotiable target for this SMA study; spinal cord / general neuron /
+# skeletal muscle are secondary context columns (muscle included since SMA's
+# clinical phenotype is driven as much by denervation atrophy of skeletal
+# muscle as by the motor neuron loss itself). Resolved against whatever
+# CURIEs are actually present in this AlphaGenome release via
+# resolve_ontology_terms() below -- these are *labels* to search
+# output_metadata for, not hardcoded CURIEs, since the exact CURIE set can
+# vary by release. UBERON:0001134 (skeletal muscle tissue) is confirmed as
+# a documented example UBERON term in AlphaGenome's own docs.
 ONTOLOGY_TARGETS = {
     "motor_neuron": {"cl_id": "CL:0000100", "name_contains": ["motor neuron"]},
     "spinal_cord": {"cl_id": None, "name_contains": ["spinal cord"]},
     "neuron": {"cl_id": "CL:0000540", "name_contains": ["neuron"]},
+    "muscle": {"cl_id": "UBERON:0001134", "name_contains": ["skeletal muscle", "muscle"]},
 }
 
 # output_metadata's per-modality attributes, per AlphaGenome's documented
@@ -183,6 +188,7 @@ def summarize_scores(scores, ontology_resolved):
         "motor_neuron_quantile_score": None,
         "spinal_cord_quantile_score": None,
         "neuron_quantile_score": None,
+        "muscle_quantile_score": None,
         "best_output_type": None,
         "best_track": None,
     }
@@ -263,7 +269,7 @@ def main():
         "VID", "ORIG_CHROM", "ORIG_POS", "ORIG_REF", "ORIG_ALT",
         "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT",
         "SOURCE_MODEL", "GENE", "REASON", "SAMPLES", "status", "note",
-        "motor_neuron_quantile_score", "spinal_cord_quantile_score", "neuron_quantile_score",
+        "motor_neuron_quantile_score", "spinal_cord_quantile_score", "neuron_quantile_score", "muscle_quantile_score",
         "best_output_type", "best_track", "large_impact_motor_neuron",
     ]
 
@@ -282,7 +288,7 @@ def main():
                 n_liftover_failed += 1
                 out.write("\t".join(base_row + ["", "", "", ""] + [
                     meta["source_model"], meta["gene"], meta["reason"], meta["samples"],
-                    "liftover_failed", "", "", "", "", "", "", "",
+                    "liftover_failed", "", "", "", "", "", "", "", "",
                 ]) + "\n")
                 continue
 
@@ -295,7 +301,7 @@ def main():
                 sys.stderr.write(f"[run_alphagenome] WARNING: scoring failed for {vid} ({chrom}:{pos}:{ref}>{alt}): {e}\n")
                 n_scoring_failed += 1
                 note = " ".join(str(e).split())  # tabs/newlines would otherwise break the TSV row
-                out.write("\t".join(base_row + ["scoring_failed", note, "", "", "", "", "", ""]) + "\n")
+                out.write("\t".join(base_row + ["scoring_failed", note, "", "", "", "", "", "", ""]) + "\n")
                 continue
 
             mn_score = summary["motor_neuron_quantile_score"]
@@ -306,6 +312,7 @@ def main():
                 "" if summary["motor_neuron_quantile_score"] is None else f"{summary['motor_neuron_quantile_score']:.4f}",
                 "" if summary["spinal_cord_quantile_score"] is None else f"{summary['spinal_cord_quantile_score']:.4f}",
                 "" if summary["neuron_quantile_score"] is None else f"{summary['neuron_quantile_score']:.4f}",
+                "" if summary["muscle_quantile_score"] is None else f"{summary['muscle_quantile_score']:.4f}",
                 summary["best_output_type"] or "",
                 summary["best_track"] or "",
                 str(large_impact),
