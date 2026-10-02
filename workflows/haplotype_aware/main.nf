@@ -85,9 +85,14 @@ def helpMessage() {
                                          pileup, split by haplotype (HP tag), producing per-haplotype
                                          bedMethyl under <results>/methylation/modkit.
 
-    AlphaGenome variant-effect annotation (scaffold only -- see bin/run_alphagenome.py TODOs):
+    AlphaGenome functional scoring of recessive_modifier/dominant_modifier PASS candidates
+    (motor-neuron-focused; requires --run_snpeff and --family_json):
     --run_alphagenome [bool]            (default: false)
-    --alphagenome_weights [dir]         Required if --run_alphagenome is true
+    --alphagenome_weights [dir]         Local Kaggle AlphaGenome weights dir. Required if --run_alphagenome is true
+    --hg38_genome [fasta]               hg38 reference FASTA (AlphaGenome's training build). Required if --run_alphagenome is true AND --genome_version is "T2T"
+    --genome_version [T2T|HG38]         Which assembly --genome actually is (default: "T2T"). Controls whether the alphagenome step lifts candidates to hg38 first (T2T) or skips liftover entirely (HG38, when --genome is already hg38)
+    --chm13_to_hg38_chain [chain]       CHM13(hs1)->hg38 liftover chain file. Optional -- auto-fetched from UCSC if unset (fails loudly if your compute nodes lack internet access; fetch it once from a login node and set this instead if so)
+    --alphagenome_quantile_threshold [float]  |quantile_score| cutoff for large_impact_motor_neuron (default: 0.9)
     --alphagenome_args [str]            Extra raw args appended to the alphagenome command line
 
     Misc:
@@ -536,6 +541,44 @@ workflow {
                     .collect()
 
                 recessive_modifier( file(params.family_json), vcf_manifest_ch, vcfs_ch )
+
+                ////////////////// ALPHAGENOME VARIANT-EFFECT SCORING /////////////////////
+                // Scores the recessive_modifier/dominant_modifier PASS candidates (not
+                // the raw consolidated VCF) for predicted large regulatory impact
+                // (expression/splicing) in motor-neuron-relevant tissue. AlphaGenome is
+                // trained on hg38 -- params.genome_version tells this step whether the
+                // pipeline's own params.genome (candidates are already called against
+                // it) is CHM13/T2T (needs liftover, the default) or already hg38 (skip
+                // liftover entirely -- lifting already-hg38 coordinates with a
+                // CHM13->hg38 chain would be wrong). See subworkflows/ont.nf's
+                // alphagenome workflow. params.chm13_to_hg38_chain is optional in T2T
+                // mode: if unset, the chain is fetched automatically
+                // (FETCH_CHM13_TO_HG38_CHAIN, modules/alphagenome/main.nf).
+                if (params.run_alphagenome) {
+                    if (!params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
+                    if (!(params.genome_version in ['T2T', 'HG38'])) {
+                        exit 1, "params.genome_version must be 'T2T' or 'HG38' (got: ${params.genome_version})"
+                    }
+
+                    skip_liftover = (params.genome_version == 'HG38')
+
+                    if (skip_liftover) {
+                        // params.genome IS hg38 already -- reuse its existing index
+                        // instead of requiring/indexing a separate hg38_genome resource
+                        hg38_fai_index = samtools_fai_index
+                    } else {
+                        if (!params.hg38_genome) { exit 1, 'params.hg38_genome not set! (required when params.genome_version is "T2T")' }
+                        INDEX_REFERENCE( file(params.hg38_genome, checkIfExists: true) )
+                        hg38_fai_index = INDEX_REFERENCE.out.ref_indexed_ch
+                    }
+
+                    alphagenome(
+                        recessive_modifier.out.recessive_modifier_ch,
+                        recessive_modifier.out.dominant_modifier_ch,
+                        hg38_fai_index,
+                        skip_liftover
+                    )
+                }
             }
         }
 
@@ -560,17 +603,6 @@ workflow {
                 }
 
             WHATSHAP_PHASE_TRIO( samtools_fai_index, trio_phasing_input )
-        }
-
-        ////////////////// ALPHAGENOME VARIANT-EFFECT ANNOTATION /////////////////////
-        // scaffold only -- disabled by default until bin/run_alphagenome.py's
-        // TODOs are filled in against your local weights directory
-        if (params.run_alphagenome) {
-            if (!params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
-
-            alphagenome_input_ch = consolidate_variants.out.consolidated_ch
-
-            alphagenome( alphagenome_input_ch, samtools_fai_index )
         }
 
     }

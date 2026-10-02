@@ -475,23 +475,67 @@ workflow recessive_modifier {
         vcfs           // collected list of every sample's snpeff vcf (staged alongside the manifest)
 
     main :
-        RECESSIVE_MODIFIER( family_json, vcf_manifest, vcfs, file("${params.bin}/recessive_modifier_consolidated.py") )
+        RECESSIVE_MODIFIER(
+            family_json, vcf_manifest, vcfs,
+            file("${params.bin}/_modifier_common.py"),
+            file("${params.bin}/recessive_modifier_consolidated.py"),
+            file("${params.bin}/dominant_modifier_consolidated.py")
+        )
 
     emit :
         recessive_modifier_ch = RECESSIVE_MODIFIER.out.recessive_modifier_ch
         recessive_modifier_gene_summary_ch = RECESSIVE_MODIFIER.out.recessive_modifier_gene_summary_ch
+        dominant_modifier_ch = RECESSIVE_MODIFIER.out.dominant_modifier_ch
+        dominant_modifier_gene_summary_ch = RECESSIVE_MODIFIER.out.dominant_modifier_gene_summary_ch
 }
 
-include { ALPHAGENOME } from '../modules/alphagenome/main.nf'
+include { FETCH_CHM13_TO_HG38_CHAIN; BUILD_ALPHAGENOME_INPUT; LIFTOVER_ALPHAGENOME_VARIANTS; ALPHAGENOME } from '../modules/alphagenome/main.nf'
 workflow alphagenome {
 
     take :
-        data
-        genome
+        recessive_modifier_tsv   // cohort.recessive_modifier.tsv
+        dominant_modifier_tsv    // cohort.dominant_modifier.tsv
+        hg38_fai_index           // tuple path(hg38 FASTA), path(its .fai) -- AlphaGenome's training build
+        skip_liftover            // true when params.genome_version == "HG38" -- the pipeline's own
+                                  // reference IS hg38 already, so candidates need no liftover at all
 
     main :
-        ALPHAGENOME( data, genome )
+        BUILD_ALPHAGENOME_INPUT(
+            recessive_modifier_tsv, dominant_modifier_tsv,
+            file("${params.bin}/build_alphagenome_input.py")
+        )
+
+        if (skip_liftover) {
+            scoring_vcf_ch = BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch
+            unmapped_ch = Channel.empty()
+        } else {
+            // params.chm13_to_hg38_chain is optional -- if unset, fetch
+            // UCSC's official chain automatically (see
+            // FETCH_CHM13_TO_HG38_CHAIN for the compute-node-internet
+            // caveat); if set, use that file as-is.
+            if (params.chm13_to_hg38_chain) {
+                chain_ch = Channel.fromPath(params.chm13_to_hg38_chain, checkIfExists: true)
+            } else {
+                FETCH_CHM13_TO_HG38_CHAIN()
+                chain_ch = FETCH_CHM13_TO_HG38_CHAIN.out.chain_ch
+            }
+
+            LIFTOVER_ALPHAGENOME_VARIANTS(
+                BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
+                chain_ch, hg38_fai_index
+            )
+            scoring_vcf_ch = LIFTOVER_ALPHAGENOME_VARIANTS.out.lifted_vcf_ch
+            unmapped_ch = LIFTOVER_ALPHAGENOME_VARIANTS.out.unmapped_ch
+        }
+
+        ALPHAGENOME(
+            BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
+            scoring_vcf_ch,
+            hg38_fai_index,
+            file("${params.bin}/run_alphagenome.py")
+        )
 
     emit :
         alphagenome_ch = ALPHAGENOME.out.alphagenome_ch
+        alphagenome_unmapped_ch = unmapped_ch
 }
