@@ -83,40 +83,46 @@ class GnomadNFEAnnotator:
 
     def __init__(self, gnomad_vcf_path=None):
         self.gnomad_vcf_path = gnomad_vcf_path
-        self.af_dict = None
 
-    @timing
     def load(self):
-        """Load (or build+cache) the CHROM:POS:REF>ALT -> AF_nfe lookup."""
-        if self.af_dict is not None:
-            return  # Already loaded
-
+        """No-op, kept for callers: the lookup is targeted, done in annotate_batch()."""
         if not self.gnomad_vcf_path:
             logger.warning("No gnomAD CHM13 VCF provided")
-            return
 
-        pickle_file = f"{self.gnomad_vcf_path}.pickle"
+    @timing
+    def annotate_batch(self, variants):
+        """
+        variants: list of (chrom, pos, ref, alt) -> dict variant_id -> AF_nfe or None
 
-        if os.path.exists(pickle_file):
-            logger.info(f"Loading cached gnomAD AF_nfe lookup from {pickle_file}...")
-            with open(pickle_file, 'rb') as f:
-                self.af_dict = pickle.load(f)
-            logger.info(f"gnomAD AF_nfe lookup loaded: {len(self.af_dict):,} variants")
-            return
+        Single streaming pass over the gnomAD VCF that only keeps records
+        matching the given (already-filtered) candidates -- the full
+        resource is hundreds of millions of sites, far too large to hold
+        in memory as a dict, while the candidate set is tiny.
+        """
+        results = {f"{c}:{p}:{r}>{a}": None for c, p, r, a in variants}
+        if not self.gnomad_vcf_path or not results:
+            return results
 
-        logger.info(f"Building gnomAD AF_nfe lookup from {self.gnomad_vcf_path}...")
+        # cheap (chrom, pos) prefilter so INFO is only parsed for candidate sites
+        wanted_sites = {(c, str(p)) for c, p, _, _ in variants}
 
-        af_dict = {}
+        logger.info(f"Scanning {self.gnomad_vcf_path} for {len(results):,} candidate variants...")
+        n_records = 0
+        n_found = 0
         with opener(self.gnomad_vcf_path) as f:
             for line in f:
                 if line.startswith("#"):
                     continue
+                n_records += 1
 
-                fields = line.rstrip("\n").split("\t")
-                chrom, pos, ref, alt, info = fields[0], fields[1], fields[3], fields[4], fields[7]
-
+                fields = line.split("\t", 8)
+                chrom, pos = fields[0], fields[1]
                 if not chrom.startswith("chr"):
                     chrom = f"chr{chrom}"
+                if (chrom, pos) not in wanted_sites:
+                    continue
+
+                ref, alt, info = fields[3], fields[4], fields[7]
 
                 af_nfe = None
                 for entry in info.split(';'):
@@ -133,28 +139,19 @@ class GnomadNFEAnnotator:
                     continue
 
                 for a, af in zip(alts, afs):
-                    try:
-                        af_dict[f"{chrom}:{pos}:{ref}>{a}"] = float(af)
-                    except ValueError:
-                        continue
+                    variant_id = f"{chrom}:{pos}:{ref}>{a}"
+                    if variant_id in results and results[variant_id] is None:
+                        try:
+                            results[variant_id] = float(af)
+                            n_found += 1
+                        except ValueError:
+                            continue
 
-        self.af_dict = af_dict
-
-        logger.info(f"Caching gnomAD AF_nfe lookup to {pickle_file} for faster future loading...")
-        with open(pickle_file, 'wb') as f:
-            pickle.dump(self.af_dict, f)
-
-        logger.info(f"gnomAD AF_nfe lookup built: {len(self.af_dict):,} variants")
-
-    def annotate_batch(self, variants):
-        """variants: list of (chrom, pos, ref, alt) -> dict variant_id -> AF_nfe or None"""
-        if self.af_dict is None:
-            return {f"{c}:{p}:{r}>{a}": None for c, p, r, a in variants}
-
-        results = {}
-        for chrom, pos, ref, alt in variants:
-            variant_id = f"{chrom}:{pos}:{ref}>{alt}"
-            results[variant_id] = self.af_dict.get(variant_id, None)
+        logger.info(f"gnomAD scan done: {n_records:,} records scanned, "
+                    f"AF_nfe found for {n_found:,}/{len(results):,} candidates")
+        if n_records and not n_found:
+            logger.warning("No candidate matched gnomAD -- check that the VCF's INFO field is "
+                           "named exactly 'AF_nfe' and its contig names match (chr1 / 1)")
         return results
 
 
