@@ -114,6 +114,11 @@ def main():
                     help="Fraction of HP-tagged reads one haplotype must reach to call HP1/HP2 vs AMBIGUOUS")
     args = p.parse_args()
 
+    # Straglr's TSV has one row per supporting READ (locus columns repeated
+    # for every read), so without this each locus would be re-queried ~depth
+    # times -- enough samtools calls to blow the 1h SLURM limit genome-wide.
+    locus_cache = {}
+
     with open(args.output, "w") as out:
         for line, chrom, start, end in iter_calls(args.calls, args.mode):
             if chrom is None:
@@ -123,7 +128,10 @@ def main():
                     out.write(f"{line}\n")
                 continue
 
-            haplotype = assign_haplotype(args.bam, chrom, start, end, args.flank, args.majority_ratio)
+            key = (chrom, start, end)
+            if key not in locus_cache:
+                locus_cache[key] = assign_haplotype(args.bam, chrom, start, end, args.flank, args.majority_ratio)
+            haplotype = locus_cache[key]
             out.write(f"{line}\t{haplotype}\n")
 
 
