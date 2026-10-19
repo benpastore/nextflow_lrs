@@ -109,13 +109,20 @@ class GnomadNFEAnnotator:
         logger.info(f"Scanning {self.gnomad_vcf_path} for {len(results):,} candidate variants...")
         n_records = 0
         n_found = 0
+        n_malformed = 0
         with opener(self.gnomad_vcf_path) as f:
             for line in f:
                 if line.startswith("#"):
                     continue
-                n_records += 1
 
                 fields = line.split("\t", 8)
+                # blank / truncated lines (e.g. a trailing newline, or a
+                # partially-written download) -- skip rather than crash
+                if len(fields) < 8:
+                    n_malformed += 1
+                    continue
+                n_records += 1
+
                 chrom, pos = fields[0], fields[1]
                 if not chrom.startswith("chr"):
                     chrom = f"chr{chrom}"
@@ -149,6 +156,9 @@ class GnomadNFEAnnotator:
 
         logger.info(f"gnomAD scan done: {n_records:,} records scanned, "
                     f"AF_nfe found for {n_found:,}/{len(results):,} candidates")
+        if n_malformed:
+            logger.warning(f"Skipped {n_malformed:,} malformed (<8 column) line(s) in "
+                           f"{self.gnomad_vcf_path} -- check the file isn't truncated/corrupt")
         if n_records and not n_found:
             logger.warning("No candidate matched gnomAD -- check that the VCF's INFO field is "
                            "named exactly 'AF_nfe' and its contig names match (chr1 / 1)")
