@@ -14,6 +14,7 @@ index/
 null/
 results/
 raw_data/
+gnomAD/
 *.out
 z_old/
 genomes/
