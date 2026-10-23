@@ -49,10 +49,12 @@ process FETCH_CHM13_TO_HG38_CHAIN {
         echo "ERROR: downloaded chain file is suspiciously small (\${size} bytes) -- likely a failed/partial download" >&2
         exit 1
     fi
-    zcat chm13v2-hg38.over.chain.gz | head -1 | grep -q '^chain ' || {
-        echo "ERROR: downloaded file doesn't look like a chain file (first line isn't a 'chain' record)" >&2
+    # pipefail off in a subshell: head exits after one line, so zcat gets
+    # SIGPIPE (141) and would otherwise fail this check on a valid file.
+    if ! (set +o pipefail; zcat chm13v2-hg38.over.chain.gz | grep -v '^#' | head -n 1 | grep -q '^chain '); then
+        echo "ERROR: downloaded file doesn't look like a chain file (first non-comment line isn't a 'chain' record)" >&2
         exit 1
-    }
+    fi
     """
 }
 
