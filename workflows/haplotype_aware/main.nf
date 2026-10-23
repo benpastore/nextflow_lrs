@@ -122,6 +122,7 @@ nextflow.enable.dsl=2
 include { DESIGN_INPUT } from '../../modules/parse_design/main.nf'
 include { NANOPLOT_RAW } from '../../modules/nanoplot/main.nf'
 include { INDEX_REFERENCE } from '../../modules/samtools/main.nf'
+include { INDEX_REFERENCE as INDEX_HG38_REFERENCE } from '../../modules/samtools/main.nf'
 
 /* include workflows */
 ///////////// ILLUMINA ////////////
@@ -568,8 +569,8 @@ workflow {
                         hg38_fai_index = samtools_fai_index
                     } else {
                         if (!params.hg38_genome) { exit 1, 'params.hg38_genome not set! (required when params.genome_version is "T2T")' }
-                        INDEX_REFERENCE( file(params.hg38_genome, checkIfExists: true) )
-                        hg38_fai_index = INDEX_REFERENCE.out.ref_indexed_ch
+                        INDEX_HG38_REFERENCE( file(params.hg38_genome, checkIfExists: true) )
+                        hg38_fai_index = INDEX_HG38_REFERENCE.out.ref_indexed_ch
                     }
 
                     alphagenome(
