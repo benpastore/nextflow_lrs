@@ -135,6 +135,9 @@ process ALPHAGENOME {
     #!/bin/bash
     set -euo pipefail
 
+    # \$HOME is read-only inside the container
+    export MPLCONFIGDIR=\$PWD/.matplotlib
+
     python3 ${script} \\
         -candidate_vcf ${candidate_vcf} \\
         -vcf ${vcf} \\

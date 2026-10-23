@@ -135,12 +135,35 @@ def resolve_ontology_terms(model, dna_client):
     return resolved
 
 
+def find_checkpoint(weights_dir, model_version="all_folds"):
+    """Resolve the local checkpoint dir inside a pre-downloaded weights dir.
+
+    Accepts either a kagglehub cache root (<dir>/models/google/alphagenome/
+    jax/all_folds/<N>/, newest <N> wins) or the checkpoint dir itself.
+    """
+    model_root = os.path.join(weights_dir, "models", "google", "alphagenome", "jax", model_version)
+    if os.path.isdir(model_root):
+        versions = [d for d in os.listdir(model_root)
+                    if d.isdigit() and os.path.isdir(os.path.join(model_root, d))]
+        if not versions:
+            sys.exit(f"[run_alphagenome] FATAL: no numbered version dirs under {model_root}")
+        return os.path.join(model_root, max(versions, key=int))
+    return weights_dir
+
+
 def load_model(weights_dir):
-    """Load AlphaGenome for local inference against a pre-downloaded Kaggle weights cache."""
-    os.environ.setdefault("KAGGLEHUB_CACHE", weights_dir)
+    """Load AlphaGenome for local inference against a pre-downloaded Kaggle weights cache.
+
+    Calls dna_model.create() on the local checkpoint directly rather than
+    create_from_kaggle(), which calls kagglehub.login() (an interactive
+    prompt) whenever no Kaggle credentials are configured -- even when the
+    weights are already cached -- and so crashes on a batch compute node.
+    """
     from alphagenome_research.model import dna_model
     from alphagenome.models import dna_client
-    model = dna_model.create_from_kaggle("all_folds")
+    checkpoint = find_checkpoint(weights_dir)
+    sys.stderr.write(f"[run_alphagenome] loading checkpoint: {checkpoint}\n")
+    model = dna_model.create(checkpoint)
     return model, dna_client
 
 
