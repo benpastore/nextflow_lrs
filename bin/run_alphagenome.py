@@ -13,13 +13,10 @@ LIFTOVER_ALPHAGENOME_VARIANTS, see modules/alphagenome/main.nf) -- its
 SOURCE_MODEL/GENE/REASON/SAMPLES INFO fields are carried straight through
 to the output table.
 
-*** First-real-run risk, flagged deliberately (see the plan this was built
-from): the exact shape of what model.score_variant(...) returns (which
-AnnData attribute holds quantile_score -- .layers vs a per-scorer .X vs
-something else) is inferred from documentation, not from having actually
-run this. summarize_scores() below is the one function to adjust if the
-real return shape differs -- everything else (ontology resolution, VCF
-I/O, CLI) doesn't depend on that detail and shouldn't need changes.
+model.score_variant(...) returns a list of AnnData (one per variant
+scorer); summarize_scores() flattens it with the package's own
+variant_scorers.tidy_scores() rather than poking at AnnData internals
+(quantiles live in .layers['quantiles'], track metadata in .var).
 """
 import argparse
 import gzip
@@ -176,36 +173,35 @@ DEFAULT_WINDOW = 131_072
 
 
 def resize_interval(genome_mod, dna_client, chrom, pos, window):
+    # dict of name -> length, e.g. {'SEQUENCE_LENGTH_100KB': 131072, ...}
     supported = getattr(dna_client, "SUPPORTED_SEQUENCE_LENGTHS", None)
     if supported:
-        window = min(supported, key=lambda length: abs(length - window))
+        window = min(supported.values(), key=lambda length: abs(length - window))
     half = window // 2
     return genome_mod.Interval(chromosome=chrom, start=max(0, pos - half), end=pos + half)
 
 
-def score_variant(model, genome_mod, dna_client, ontology_curies, chrom, pos, ref, alt, window):
+# Expression + splicing scorers only. score_variant() scores every track;
+# ontology filtering happens afterwards in summarize_scores().
+VARIANT_SCORER_KEYS = ["RNA_SEQ", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS"]
+
+
+def score_variant(model, genome_mod, dna_client, variant_scorers, chrom, pos, ref, alt, window):
     interval = resize_interval(genome_mod, dna_client, chrom, pos, window)
     variant = genome_mod.Variant(chromosome=chrom, position=pos, reference_bases=ref, alternate_bases=alt)
-    outputs = [
-        dna_client.OutputType.RNA_SEQ,
-        dna_client.OutputType.SPLICE_SITE_USAGE,
-        dna_client.OutputType.SPLICE_JUNCTIONS,
-    ]
     return model.score_variant(
         interval=interval,
         variant=variant,
-        ontology_terms=ontology_curies,
-        requested_outputs=outputs,
+        variant_scorers=variant_scorers,
+        organism=dna_client.Organism.HOMO_SAPIENS,
     )
 
 
-def summarize_scores(scores, ontology_resolved):
+def summarize_scores(scores, ontology_resolved, variant_scorers_lib):
     """
-    scores: AnnData-like (genes x tracks) with track metadata in .var
-    (including ontology_curie) and a quantile_score layer -- see the
-    first-real-run-risk note at the top of this file. Returns, per
-    resolved ontology term, the largest-magnitude quantile_score across
-    that term's tracks.
+    scores: list[AnnData] from model.score_variant(), one per scorer.
+    Returns, per resolved ontology term, the largest-magnitude
+    quantile_score across that term's tracks (all genes, all scorers).
     """
     result = {
         "motor_neuron_quantile_score": None,
@@ -216,32 +212,25 @@ def summarize_scores(scores, ontology_resolved):
         "best_track": None,
     }
 
-    var = getattr(scores, "var", None)
-    layers = getattr(scores, "layers", None)
-    if var is None or layers is None or "quantile_score" not in layers or "ontology_curie" not in var.columns:
+    df = variant_scorers_lib.tidy_scores(scores)
+    if df is None or "quantile_score" not in df.columns or "ontology_curie" not in df.columns:
         return result
+    df = df.dropna(subset=["quantile_score"])
 
-    quantile = layers["quantile_score"]
-    best_abs = -1.0
     for key, curie in ontology_resolved.items():
         if not curie:
             continue
-        track_mask = (var["ontology_curie"] == curie).values
-        if not track_mask.any():
+        sub = df[df["ontology_curie"] == curie]
+        if sub.empty:
             continue
-        sub = quantile[:, track_mask]
-        if sub.size == 0:
-            continue
-        flat = sub.flatten()
-        max_flat_idx = abs(flat).argmax()
-        max_val = float(flat[max_flat_idx])
-        result[f"{key}_quantile_score"] = max_val
-        if key == "motor_neuron" and abs(max_val) > best_abs:
-            best_abs = abs(max_val)
-            gene_idx, track_col = divmod(max_flat_idx, sub.shape[1])
-            track_idx = track_mask.nonzero()[0][track_col]
-            result["best_output_type"] = str(var.iloc[track_idx].get("output_type", ""))
-            result["best_track"] = str(var.iloc[track_idx].get("name", var.index[track_idx]))
+        best = sub.loc[sub["quantile_score"].abs().idxmax()]
+        result[f"{key}_quantile_score"] = float(best["quantile_score"])
+        if key == "motor_neuron":
+            result["best_output_type"] = str(best.get("output_type", ""))
+            # tidy_scores leaves missing gene fields as NaN, not None
+            gene = next((g for g in (best.get("gene_name"), best.get("gene_id")) if isinstance(g, str) and g), "")
+            track = str(best.get("track_name", ""))
+            result["best_track"] = f"{track}|{gene}" if gene else track
 
     return result
 
@@ -266,9 +255,10 @@ def main():
     args = p.parse_args()
 
     model, dna_client = load_model(args.weights)
-    from alphagenome.models import genome as genome_mod
+    from alphagenome.data import genome as genome_mod
+    from alphagenome.models import variant_scorers as variant_scorers_lib
+    variant_scorers = [variant_scorers_lib.RECOMMENDED_VARIANT_SCORERS[k] for k in VARIANT_SCORER_KEYS]
     ontology_resolved = resolve_ontology_terms(model, dna_client)
-    ontology_curies = [c for c in ontology_resolved.values() if c]
 
     # Reconcile against the full pre-liftover candidate list, keyed by VCF
     # ID (CrossMap preserves it unchanged through liftover; CHROM/POS/REF/ALT
@@ -318,8 +308,8 @@ def main():
             chrom, pos, ref, alt = lifted_by_vid[vid]
             base_row += [chrom, str(pos), ref, alt, meta["source_model"], meta["gene"], meta["reason"], meta["samples"]]
             try:
-                scores = score_variant(model, genome_mod, dna_client, ontology_curies, chrom, pos, ref, alt, args.window)
-                summary = summarize_scores(scores, ontology_resolved)
+                scores = score_variant(model, genome_mod, dna_client, variant_scorers, chrom, pos, ref, alt, args.window)
+                summary = summarize_scores(scores, ontology_resolved, variant_scorers_lib)
             except Exception as e:
                 sys.stderr.write(f"[run_alphagenome] WARNING: scoring failed for {vid} ({chrom}:{pos}:{ref}>{alt}): {e}\n")
                 n_scoring_failed += 1
