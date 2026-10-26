@@ -529,8 +529,9 @@ workflow alphagenome {
         }
 
         // Local GPU inference and the hosted-API backup are independent --
-        // either, both, or (pointlessly) neither; they share the input prep
-        // above and publish to separate dirs.
+        // either, both, or neither (input prep + liftover alone, e.g. when
+        // only AlphaMissense needs hg38 coordinates); they share the input
+        // prep above and publish to separate dirs.
         local_scores_ch = Channel.empty()
         if (params.run_alphagenome) {
             ALPHAGENOME(
@@ -557,4 +558,30 @@ workflow alphagenome {
         alphagenome_ch = local_scores_ch
         alphagenome_api_ch = api_scores_ch
         alphagenome_unmapped_ch = unmapped_ch
+        hg38_vcf_ch = scoring_vcf_ch       // candidates in hg38 coords (also used for AlphaMissense lookup)
+}
+include { VARIANT_REPORT } from '../modules/variant_report/main.nf'
+workflow variant_report {
+
+    take :
+        recessive_modifier_tsv   // cohort.recessive_modifier.tsv
+        dominant_modifier_tsv    // cohort.dominant_modifier.tsv
+        family_json              // path to family.json (mild/severe phenotype per child)
+        vcf_manifest             // path: sampleID<TAB>snpeff_vcf_path, one per sample
+        vcfs                     // collected list of every sample's snpeff vcf
+        hg38_vcf                 // candidates in hg38 coords, or file("NO_FILE")
+        alphagenome_tsv          // local-backend AlphaGenome scores, or file("NO_FILE")
+        alphagenome_api_tsv      // API-backend AlphaGenome scores, or file("NO_FILE")
+
+    main :
+        VARIANT_REPORT(
+            recessive_modifier_tsv, dominant_modifier_tsv, family_json,
+            vcf_manifest, vcfs,
+            hg38_vcf, alphagenome_tsv, alphagenome_api_tsv,
+            file("${params.bin}/_modifier_common.py"),
+            file("${params.bin}/build_variant_report.py")
+        )
+
+    emit :
+        variant_report_ch = VARIANT_REPORT.out.variant_report_ch
 }

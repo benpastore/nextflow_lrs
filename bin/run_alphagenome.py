@@ -77,13 +77,19 @@ ONTOLOGY_TARGETS = {
     "muscle": {"cl_id": "UBERON:0001134", "name_contains": ["skeletal muscle", "muscle"]},
 }
 
-# output_metadata's per-modality attributes, per AlphaGenome's documented
-# OutputType list -- accessed as output_metadata.<name> (confirmed pattern:
-# "output_metadata.rna_seq" in the quick-start docs).
-OUTPUT_METADATA_ATTRS = [
-    "atac", "cage", "dnase", "rna_seq", "chip_histone", "chip_tf",
-    "splice_sites", "splice_site_usage", "splice_junctions", "contact_maps", "procap",
-]
+# Scorers run per variant (keys of variant_scorers.RECOMMENDED_VARIANT_SCORERS,
+# which for these are also the OutputType names). Each gets its own output
+# column per tissue. Expression/splicing: RNA_SEQ (gene-level expression
+# LFC), SPLICE_SITE_USAGE, SPLICE_JUNCTIONS. Chromatin: ATAC and DNASE
+# (accessibility) and CHIP_HISTONE (histone marks) -- center-mask scorers,
+# i.e. the local effect in a ~501bp (2001bp for histone) window around the
+# variant. Order is also ontology-resolution priority (see below).
+VARIANT_SCORER_KEYS = ["RNA_SEQ", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS", "DNASE", "ATAC", "CHIP_HISTONE"]
+
+# output_metadata's per-modality attributes (output_metadata.rna_seq etc.) --
+# only the modalities actually scored, so a tissue term can only resolve if
+# some scored track carries it (otherwise its columns would be silently empty).
+OUTPUT_METADATA_ATTRS = [k.lower() for k in VARIANT_SCORER_KEYS]
 
 
 def resolve_ontology_terms(model, dna_client):
@@ -253,11 +259,6 @@ def resize_interval(genome_mod, dna_client, chrom_sizes, chrom, pos, window):
     return genome_mod.Interval(chromosome=chrom, start=start, end=start + window)
 
 
-# Expression + splicing scorers only. score_variant() scores every track;
-# ontology filtering happens afterwards in summarize_scores().
-VARIANT_SCORER_KEYS = ["RNA_SEQ", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS"]
-
-
 def score_variant(model, genome_mod, dna_client, variant_scorers, chrom_sizes, chrom, pos, ref, alt, window):
     """Returns (scores, failed_scorer_notes). Tries all scorers in one pass;
     if that raises (e.g. SpliceJunctionScorer errors when no junctions fall
@@ -292,36 +293,42 @@ def score_variant(model, genome_mod, dna_client, variant_scorers, chrom_sizes, c
     return scores, failed
 
 
+def score_columns():
+    """One column per tissue x scorer, e.g. motor_neuron_RNA_SEQ."""
+    return [f"{tissue}_{scorer}" for tissue in ONTOLOGY_TARGETS for scorer in VARIANT_SCORER_KEYS]
+
+
 def summarize_scores(scores, ontology_resolved, variant_scorers_lib):
     """
     scores: list[AnnData] from model.score_variant(), one per scorer.
-    Returns, per resolved ontology term, the largest-magnitude
-    quantile_score across that term's tracks (all genes, all scorers).
+    Returns {tissue_SCORER: signed quantile_score} -- the largest-magnitude
+    quantile across that tissue's tracks for that scorer (all genes in the
+    window for gene-level scorers, all marks for CHIP_HISTONE) -- plus the
+    single strongest motor-neuron hit across all scorers.
     """
-    result = {
-        "motor_neuron_quantile_score": None,
-        "spinal_cord_quantile_score": None,
-        "neuron_quantile_score": None,
-        "muscle_quantile_score": None,
-        "best_output_type": None,
-        "best_track": None,
-    }
+    result = {col: None for col in score_columns()}
+    result.update({"motor_neuron_max_abs": None, "best_output_type": None, "best_track": None})
 
     df = variant_scorers_lib.tidy_scores(scores)
     if df is None or "quantile_score" not in df.columns or "ontology_curie" not in df.columns:
         return result
     df = df.dropna(subset=["quantile_score"])
+    # output_type may come back as an OutputType enum or "OutputType.RNA_SEQ"
+    # -- normalize to the bare name so it matches VARIANT_SCORER_KEYS
+    df = df.assign(scorer=df["output_type"].map(lambda o: str(getattr(o, "name", o)).split(".")[-1].upper()))
 
-    for key, curie in ontology_resolved.items():
+    for tissue, curie in ontology_resolved.items():
         if not curie:
             continue
         sub = df[df["ontology_curie"] == curie]
-        if sub.empty:
-            continue
-        best = sub.loc[sub["quantile_score"].abs().idxmax()]
-        result[f"{key}_quantile_score"] = float(best["quantile_score"])
-        if key == "motor_neuron":
-            result["best_output_type"] = str(best.get("output_type", ""))
+        for scorer, grp in sub.groupby("scorer"):
+            col = f"{tissue}_{scorer}"
+            if col in result:
+                result[col] = float(grp.loc[grp["quantile_score"].abs().idxmax(), "quantile_score"])
+        if tissue == "motor_neuron" and not sub.empty:
+            best = sub.loc[sub["quantile_score"].abs().idxmax()]
+            result["motor_neuron_max_abs"] = abs(float(best["quantile_score"]))
+            result["best_output_type"] = best["scorer"]
             # tidy_scores leaves missing gene fields as NaN, not None
             gene = next((g for g in (best.get("gene_name"), best.get("gene_id")) if isinstance(g, str) and g), "")
             track = str(best.get("track_name", ""))
@@ -351,7 +358,8 @@ def main():
                    help="Directory of pre-downloaded AlphaGenome annotation/calibration files "
                         "(bin/download_alphagenome_resources.sh). Unset = fetch them from GCS at startup.")
     p.add_argument("-window", type=int, default=DEFAULT_WINDOW, help="Sequence context window (bp), resized to the nearest AlphaGenome-supported length")
-    p.add_argument("-quantile_threshold", type=float, default=0.9, help="|quantile_score| at/above which a variant is flagged large_impact_motor_neuron")
+    p.add_argument("-quantile_threshold", type=float, default=0.9,
+                   help="Flag large_impact_motor_neuron when any scorer's motor-neuron |quantile_score| is at/above this")
     p.add_argument("-output", required=True, help="Output TSV path")
     args = p.parse_args()
 
@@ -389,9 +397,17 @@ def main():
         "VID", "ORIG_CHROM", "ORIG_POS", "ORIG_REF", "ORIG_ALT",
         "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT",
         "SOURCE_MODEL", "GENE", "REASON", "SAMPLES", "status", "note",
-        "motor_neuron_quantile_score", "spinal_cord_quantile_score", "neuron_quantile_score", "muscle_quantile_score",
-        "best_output_type", "best_track", "large_impact_motor_neuron",
+        *score_columns(),
+        "motor_neuron_max_abs", "best_output_type", "best_track", "large_impact_motor_neuron",
     ]
+
+    def fmt(v):
+        if v is None:
+            return ""
+        return f"{v:.4f}" if isinstance(v, float) else str(v)
+
+    def write_row(out, row):
+        out.write("\t".join(fmt(row.get(c)) for c in columns) + "\n")
 
     n_scored = 0
     n_liftover_failed = 0
@@ -400,20 +416,20 @@ def main():
         out.write("\t".join(columns) + "\n")
         for vid in sorted(candidates_by_vid):
             meta = candidates_by_vid[vid]
-            base_row = [
-                vid, meta["chrom"], str(meta["pos"]), meta["ref"], meta["alt"],
-            ]
+            row = {
+                "VID": vid, "ORIG_CHROM": meta["chrom"], "ORIG_POS": meta["pos"],
+                "ORIG_REF": meta["ref"], "ORIG_ALT": meta["alt"],
+                "SOURCE_MODEL": meta["source_model"], "GENE": meta["gene"],
+                "REASON": meta["reason"], "SAMPLES": meta["samples"],
+            }
 
             if vid not in lifted_by_vid:
                 n_liftover_failed += 1
-                out.write("\t".join(base_row + ["", "", "", ""] + [
-                    meta["source_model"], meta["gene"], meta["reason"], meta["samples"],
-                    "liftover_failed", "", "", "", "", "", "", "", "",
-                ]) + "\n")
+                write_row(out, {**row, "status": "liftover_failed"})
                 continue
 
             chrom, pos, ref, alt = lifted_by_vid[vid]
-            base_row += [chrom, str(pos), ref, alt, meta["source_model"], meta["gene"], meta["reason"], meta["samples"]]
+            row.update({"HG38_CHROM": chrom, "HG38_POS": pos, "HG38_REF": ref, "HG38_ALT": alt})
             try:
                 scores, failed_scorers = score_variant(model, genome_mod, dna_client, variant_scorers, chrom_sizes,
                                                        chrom, pos, ref, alt, args.window)
@@ -422,27 +438,19 @@ def main():
                 sys.stderr.write(f"[run_alphagenome] WARNING: scoring failed for {vid} ({chrom}:{pos}:{ref}>{alt}): {e}\n")
                 n_scoring_failed += 1
                 note = " ".join(str(e).split())  # tabs/newlines would otherwise break the TSV row
-                out.write("\t".join(base_row + ["scoring_failed", note, "", "", "", "", "", "", ""]) + "\n")
+                write_row(out, {**row, "status": "scoring_failed", "note": note})
                 continue
 
-            mn_score = summary["motor_neuron_quantile_score"]
-            large_impact = mn_score is not None and abs(mn_score) >= args.quantile_threshold
-
+            mn_max = summary["motor_neuron_max_abs"]
             note = ""
             if failed_scorers:
                 note = "partial; " + "; ".join(failed_scorers)
                 sys.stderr.write(f"[run_alphagenome] NOTE: {vid} scored without {', '.join(f.split(':')[0] for f in failed_scorers)}\n")
 
-            out.write("\t".join(base_row + [
-                "scored", note,
-                "" if summary["motor_neuron_quantile_score"] is None else f"{summary['motor_neuron_quantile_score']:.4f}",
-                "" if summary["spinal_cord_quantile_score"] is None else f"{summary['spinal_cord_quantile_score']:.4f}",
-                "" if summary["neuron_quantile_score"] is None else f"{summary['neuron_quantile_score']:.4f}",
-                "" if summary["muscle_quantile_score"] is None else f"{summary['muscle_quantile_score']:.4f}",
-                summary["best_output_type"] or "",
-                summary["best_track"] or "",
-                str(large_impact),
-            ]) + "\n")
+            write_row(out, {
+                **row, **summary, "status": "scored", "note": note,
+                "large_impact_motor_neuron": mn_max is not None and mn_max >= args.quantile_threshold,
+            })
             n_scored += 1
 
     sys.stderr.write(

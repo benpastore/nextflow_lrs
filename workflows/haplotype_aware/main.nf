@@ -96,6 +96,10 @@ def helpMessage() {
     --genome_version [T2T|HG38]         Which assembly --genome actually is (default: "T2T"). Controls whether the alphagenome step lifts candidates to hg38 first (T2T) or skips liftover entirely (HG38, when --genome is already hg38)
     --chm13_to_hg38_chain [chain]       CHM13(hs1)->hg38 liftover chain file. Optional -- auto-fetched from UCSC if unset (fails loudly if your compute nodes lack internet access; fetch it once from a login node and set this instead if so)
     --alphagenome_quantile_threshold [float]  |quantile_score| cutoff for large_impact_motor_neuron (default: 0.9)
+    --alphamissense_tsv [tsv.gz]        AlphaMissense_hg38.tsv.gz for missense pathogenicity in the final report (default: "" = skipped)
+
+    Final report (<results>/09_variant_report/cohort.variant_report.tsv) is written whenever the modifier search runs --
+    one row per candidate variant joining modifier info, mild/severe carriers, gnomAD AF, snpEff, AlphaMissense, AlphaGenome.
     --alphagenome_args [str]            Extra raw args appended to the alphagenome command line
 
     Misc:
@@ -165,6 +169,7 @@ include { consolidate_variants } from '../../subworkflows/ont.nf'
 include { snpeff } from '../../subworkflows/ont.nf'
 include { recessive_modifier } from '../../subworkflows/ont.nf'
 include { alphagenome } from '../../subworkflows/ont.nf'
+include { variant_report } from '../../subworkflows/ont.nf'
 
 include { herro_correction } from '../../subworkflows/herro.nf'
 include { trio_family } from '../../subworkflows/trio.nf'
@@ -558,7 +563,12 @@ workflow {
                 // alphagenome workflow. params.chm13_to_hg38_chain is optional in T2T
                 // mode: if unset, the chain is fetched automatically
                 // (FETCH_CHM13_TO_HG38_CHAIN, modules/alphagenome/main.nf).
-                if (params.run_alphagenome || params.run_alphagenome_api) {
+                // Input prep + liftover also runs when only AlphaMissense is
+                // configured, since its lookup needs hg38 coordinates.
+                hg38_vcf_ch = Channel.empty()
+                alphagenome_ch = Channel.empty()
+                alphagenome_api_ch = Channel.empty()
+                if (params.run_alphagenome || params.run_alphagenome_api || params.alphamissense_tsv) {
                     if (params.run_alphagenome && !params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
                     if (!(params.genome_version in ['T2T', 'HG38'])) {
                         exit 1, "params.genome_version must be 'T2T' or 'HG38' (got: ${params.genome_version})"
@@ -582,7 +592,25 @@ workflow {
                         hg38_fai_index,
                         skip_liftover
                     )
+                    hg38_vcf_ch = alphagenome.out.hg38_vcf_ch
+                    alphagenome_ch = alphagenome.out.alphagenome_ch
+                    alphagenome_api_ch = alphagenome.out.alphagenome_api_ch
                 }
+
+                ////////////////// FINAL PER-VARIANT REPORT /////////////////////
+                // One row per modifier PASS candidate: modifier info, mild/severe
+                // carriers, gnomAD AF, snpEff, AlphaMissense, AlphaGenome (every
+                // tissue x scorer). Whatever wasn't run is left as empty columns.
+                variant_report(
+                    recessive_modifier.out.recessive_modifier_ch,
+                    recessive_modifier.out.dominant_modifier_ch,
+                    file(params.family_json),
+                    vcf_manifest_ch,
+                    vcfs_ch,
+                    hg38_vcf_ch.ifEmpty(file("NO_FILE")),
+                    alphagenome_ch.ifEmpty(file("NO_FILE")),
+                    alphagenome_api_ch.ifEmpty(file("NO_FILE"))
+                )
             }
         }
 
