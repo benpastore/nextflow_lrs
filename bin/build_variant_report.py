@@ -13,7 +13,8 @@ models), joining everything the pipeline knows about it:
     family.json phenotype
   - snpEff: the most severe ANN entry for the variant's candidate gene(s)
   - AlphaMissense (optional): hg38 lookup, SNVs only -- max am_pathogenicity
-    across transcripts
+    across transcripts; skipped for ALLELE_FLIPPED variants (hg38's reference
+    residue is the candidate allele, so there's no missense change to score)
   - AlphaGenome (optional): every tissue x scorer column from
     bin/run_alphagenome.py, from the local run, falling back per variant to
     the API run when the local one didn't score it (alphagenome_source says
@@ -21,6 +22,11 @@ models), joining everything the pipeline knows about it:
 
 Optional inputs that are absent (or the pipeline's NO_FILE placeholder)
 just leave their columns empty.
+
+Also writes a variant funnel (-funnel_output): how many variants enter
+and leave each step (modifier search -> AlphaGenome input -> liftover ->
+AlphaGenome -> report), counted from each step's actual output files rather
+than by re-applying its filters, so it reflects what really happened.
 """
 import argparse
 import csv
@@ -56,11 +62,16 @@ def present(path):
 
 
 def read_modifier_tsvs(paths):
-    """{(chrom,pos,ref,alt): aggregated info} across both models' TSVs."""
+    """({(chrom,pos,ref,alt): aggregated info} across both models' TSVs,
+    {model: number of rows}) -- rows are per variant x gene, so the row
+    count can exceed that model's unique-variant count."""
     variants = {}
+    n_rows = {}
     for model, path in paths:
+        n_rows[model] = 0
         with open(path, newline="") as f:
             for row in csv.DictReader(f, delimiter="\t"):
+                n_rows[model] += 1
                 key = (row["#CHROM"], row["POS"], row["REF"], row["ALT"])
                 v = variants.setdefault(key, {
                     "models": set(), "samples": set(), "gnomad_AF_NFE": "",
@@ -74,7 +85,7 @@ def read_modifier_tsvs(paths):
                 v["samples"].update(s for s in (row.get("samples") or "").split(",") if s)
                 if not v["gnomad_AF_NFE"] and row.get("gnomad_AF_NFE"):
                     v["gnomad_AF_NFE"] = row["gnomad_AF_NFE"]
-    return variants
+    return variants, n_rows
 
 
 def load_phenotypes(family_json):
@@ -144,17 +155,19 @@ def best_snpeff(ann_entries, genes):
 
 
 def read_hg38_vcf(path):
-    """VID -> (chrom, pos, ref, alt) from the lifted (or already-hg38)
-    candidate VCF; ID is the original chrom_pos_ref_alt (see
-    build_alphagenome_input.py), preserved by CrossMap."""
+    """VID -> (chrom, pos, ref, alt, flipped) from the lifted (or
+    already-hg38) candidate VCF; ID is the original chrom_pos_ref_alt (see
+    build_alphagenome_input.py), preserved by CrossMap. flipped = the
+    ALLELE_FLIPPED INFO flag from flip_ref_alt_alleles.py."""
     lifted = {}
     with opener(path) as f:
         for line in f:
             if line.startswith("#"):
                 continue
             fields = line.rstrip("\n").split("\t")
-            if len(fields) >= 5:
-                lifted[fields[2]] = (fields[0], fields[1], fields[3], fields[4])
+            if len(fields) >= 8:
+                lifted[fields[2]] = (fields[0], fields[1], fields[3], fields[4],
+                                     "ALLELE_FLIPPED" in fields[7].split(";"))
     return lifted
 
 
@@ -186,6 +199,78 @@ def scan_alphamissense(path, wanted):
     return hits
 
 
+def read_vcf_ids(path):
+    ids = set()
+    with opener(path) as f:
+        for line in f:
+            if not line.startswith("#"):
+                ids.add(line.split("\t", 3)[2])
+    return ids
+
+
+def count_unmap_reasons(path):
+    """CrossMap .unmap (plus flip_ref_alt_alleles.py's appended records):
+    the failure reason is the last column, e.g. Fail(Unmap)."""
+    reasons = defaultdict(int)
+    with opener(path) as f:
+        for line in f:
+            if not line.startswith("#") and line.strip():
+                reasons[line.rstrip("\n").split("\t")[-1]] += 1
+    return reasons
+
+
+def build_funnel(variants, n_rows, candidate_ids, lifted, unmap_reasons, ag_tables, am_hits, n_report):
+    """[(step, metric, count, description)] -- see module docstring."""
+    rows = []
+    add = lambda step, metric, n, desc: rows.append((step, metric, n, desc))
+
+    by_model = defaultdict(int)
+    for v in variants.values():
+        for m in v["models"]:
+            by_model[m] += 1
+    for model in n_rows:
+        add("1_modifier_search", f"{model}_rows", n_rows[model], f"rows in cohort.{model}_modifier.tsv (one per variant x gene)")
+        add("1_modifier_search", f"{model}_unique_variants", by_model[model], f"unique variants passing the {model} model")
+    add("1_modifier_search", "unique_variants", len(variants), "START: unique variants across both models (one report row each)")
+
+    n_sv = sum(1 for k in variants if k[3].startswith("<"))
+    if candidate_ids is not None:
+        n_af = sum(1 for k in variants if not k[3].startswith("<") and "_".join(k) not in candidate_ids)
+        add("2_alphagenome_input", "removed_symbolic_sv", n_sv, "symbolic-ALT SVs, not liftable/scoreable")
+        add("2_alphagenome_input", "removed_gnomad_af", n_af, "gnomAD AF_nfe above alphagenome_max_af (unannotated AF kept)")
+        add("2_alphagenome_input", "submitted", len(candidate_ids), "sent on to liftover / AlphaGenome")
+
+    if lifted:
+        n_flipped = sum(1 for hg in lifted.values() if hg[4])
+        add("3_liftover", "lifted_as_is", len(lifted) - n_flipped, "lifted to hg38 unchanged (or already hg38)")
+        add("3_liftover", "lifted_allele_flipped", n_flipped, "REF==ALT sites recovered by flipping (hg38 ref = candidate allele)")
+        for reason, n in sorted(unmap_reasons.items()):
+            add("3_liftover", f"removed_{reason}", n, "failed liftover (CrossMap .unmap)")
+        add("3_liftover", "lifted_total", len(lifted), "candidates with hg38 coordinates")
+        if candidate_ids is not None and len(lifted) + sum(unmap_reasons.values()) != len(candidate_ids):
+            logger.warning(f"Funnel: liftover accounts for {len(lifted) + sum(unmap_reasons.values())} variant(s) "
+                           f"but {len(candidate_ids)} were submitted -- check the liftover step")
+
+    for source, ag_rows in ag_tables:
+        status = defaultdict(int)
+        n_partial = 0
+        for r in ag_rows.values():
+            status[r.get("status", "")] += 1
+            if r.get("status") == "scored" and "partial;" in (r.get("note") or ""):
+                n_partial += 1
+        step = f"4_alphagenome_{source}"
+        add(step, "input_rows", len(ag_rows), "candidates in this AlphaGenome run (one row per submitted variant)")
+        add(step, "scored", status["scored"], "scored by AlphaGenome")
+        add(step, "scored_partial", n_partial, "  of which >=1 scorer failed (see note column)")
+        add(step, "scoring_failed", status["scoring_failed"], "every scorer failed")
+        add(step, "liftover_failed", status["liftover_failed"], "no hg38 coordinates, not scored")
+
+    if am_hits or lifted:
+        add("5_report", "alphamissense_matched", len(am_hits), "hg38 SNVs with an AlphaMissense score (non-flipped only)")
+    add("5_report", "report_rows", n_report, "END: rows in cohort.variant_report.tsv (should equal unique_variants)")
+    return rows
+
+
 def read_alphagenome(path):
     """(VID -> row, result columns) from a run_alphagenome.py TSV."""
     with open(path, newline="") as f:
@@ -204,10 +289,13 @@ def main():
     p.add_argument("-alphamissense_tsv", default="", help="AlphaMissense_hg38.tsv.gz")
     p.add_argument("-alphagenome_tsv", default="", help="run_alphagenome.py output, local backend")
     p.add_argument("-alphagenome_api_tsv", default="", help="run_alphagenome.py output, API backend")
+    p.add_argument("-candidate_vcf", default="", help="AlphaGenome input VCF (build_alphagenome_input.py), for the funnel")
+    p.add_argument("-unmap", default="", help="Liftover .unmap file, for the funnel")
     p.add_argument("-output", required=True)
+    p.add_argument("-funnel_output", required=True, help="Per-step variant counts TSV")
     args = p.parse_args()
 
-    variants = read_modifier_tsvs([("recessive", args.recessive_tsv), ("dominant", args.dominant_tsv)])
+    variants, n_rows = read_modifier_tsvs([("recessive", args.recessive_tsv), ("dominant", args.dominant_tsv)])
     logger.info(f"{len(variants)} unique candidate variant(s) across recessive + dominant")
 
     phenotypes = load_phenotypes(args.family_json)
@@ -221,8 +309,9 @@ def main():
         if not lifted:
             logger.warning("AlphaMissense requested but no hg38 candidate VCF -- skipping (needs hg38 coordinates)")
         else:
-            wanted = {lifted[vid] for vid in vid_of.values()
-                      if vid in lifted and len(lifted[vid][2]) == 1 and len(lifted[vid][3]) == 1}
+            wanted = {lifted[vid][:4] for vid in vid_of.values()
+                      if vid in lifted and not lifted[vid][4]
+                      and len(lifted[vid][2]) == 1 and len(lifted[vid][3]) == 1}
             am_hits = scan_alphamissense(args.alphamissense_tsv, wanted)
 
     ag_tables = []
@@ -234,7 +323,7 @@ def main():
             ag_cols = ag_cols or cols
 
     columns = [
-        "VID", "CHROM", "POS", "REF", "ALT", "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT",
+        "VID", "CHROM", "POS", "REF", "ALT", "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT", "allele_flipped",
         "source_model", *[out for _, out in MODIFIER_FIELDS],
         "modifier_samples", "N_modifier_samples",
         "N_mild_carriers", "mild_carriers", "N_severe_carriers", "severe_carriers", "other_carriers",
@@ -275,8 +364,10 @@ def main():
 
             if vid in lifted:
                 hg = lifted[vid]
-                row.update({"HG38_CHROM": hg[0], "HG38_POS": hg[1], "HG38_REF": hg[2], "HG38_ALT": hg[3]})
-                row.update(am_hits.get(hg, {}))
+                row.update({"HG38_CHROM": hg[0], "HG38_POS": hg[1], "HG38_REF": hg[2], "HG38_ALT": hg[3],
+                            "allele_flipped": hg[4]})
+                if not hg[4]:
+                    row.update(am_hits.get(hg[:4], {}))
 
             # local result wins when it scored; otherwise the first table
             # that did, otherwise whichever has a row (to surface its status)
@@ -285,10 +376,27 @@ def main():
             if pick:
                 row["alphagenome_source"] = pick[0]
                 row.update({f"alphagenome_{c}": pick[1].get(c, "") for c in ag_cols})
+            elif ag_tables:
+                # never sent to AlphaGenome: SV, or dropped by the gnomAD AF
+                # pre-filter (build_alphagenome_input.py -max_af)
+                row["alphagenome_status"] = "not_submitted"
 
             writer.writerow(row)
 
     logger.info(f"Wrote {len(variants)} variant(s) -> {args.output}")
+
+    funnel = build_funnel(
+        variants, n_rows,
+        read_vcf_ids(args.candidate_vcf) if present(args.candidate_vcf) else None,
+        lifted,
+        count_unmap_reasons(args.unmap) if present(args.unmap) else {},
+        ag_tables, am_hits, len(variants),
+    )
+    with open(args.funnel_output, "w", newline="") as out:
+        writer = csv.writer(out, delimiter="\t")
+        writer.writerow(["step", "metric", "count", "description"])
+        writer.writerows(funnel)
+    logger.info("Variant funnel:\n" + "\n".join(f"  {step:<22} {metric:<32} {n:>8}" for step, metric, n, _ in funnel))
 
 
 if __name__ == "__main__":

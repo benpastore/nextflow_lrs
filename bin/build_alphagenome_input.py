@@ -10,15 +10,28 @@ INFO field so it survives liftover and reattaches to the final output.
 Symbolic-ALT structural variants (<DEL>, <INS>, ...) are excluded -- both
 CrossMap liftover and AlphaGenome's variant scoring expect explicit ref/alt
 sequence variants, not SV notation. Dropped count is logged, not silent.
+
+Common variants (gnomAD AF_nfe above -max_af) are also excluded -- they're
+implausible modifiers and dominate AlphaGenome run time. Variants with no
+gnomAD AF are always kept (absent from gnomAD is not evidence of common).
 """
 import argparse
 import csv
 import sys
 
 
+def parse_af(value):
+    """gnomad_AF_NFE as float, or None when unannotated (empty/NaN/None)."""
+    try:
+        af = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if af != af else af  # NaN check
+
+
 def read_modifier_tsv(path, model_name):
-    """Yields (chrom, pos, ref, alt, gene, reason, samples) per row, skipping
-    symbolic-ALT SV rows."""
+    """Yields (chrom, pos, ref, alt, gene, reason, samples, af) per row,
+    skipping symbolic-ALT SV rows."""
     if not path:
         return
     with open(path, newline="") as f:
@@ -30,6 +43,7 @@ def read_modifier_tsv(path, model_name):
             yield (
                 row["#CHROM"], int(row["POS"]), row["REF"], alt,
                 row["gene"], row["reason"], row["samples"],
+                parse_af(row.get("gnomad_AF_NFE")),
             )
 
 
@@ -39,6 +53,9 @@ def main():
                     help="cohort.recessive_modifier.tsv (optional)")
     p.add_argument("-dominant_tsv", type=str, default=None,
                     help="cohort.dominant_modifier.tsv (optional)")
+    p.add_argument("-max_af", type=float, default=None,
+                    help="Drop variants with gnomAD AF_nfe above this (unannotated AF is always kept). "
+                         "Unset = no AF filter")
     p.add_argument("-output", type=str, required=True, help="Output VCF path")
     args = p.parse_args()
 
@@ -47,12 +64,16 @@ def main():
 
     variants = {}  # (chrom,pos,ref,alt) -> {models:set, genes:set, reasons:set, samples:set}
     n_sv_skipped = 0
+    af_filtered = set()
 
     for path, model_name in ((args.recessive_tsv, "recessive"), (args.dominant_tsv, "dominant")):
         if not path:
             continue
-        for chrom, pos, ref, alt, gene, reason, samples in read_modifier_tsv(path, model_name):
+        for chrom, pos, ref, alt, gene, reason, samples, af in read_modifier_tsv(path, model_name):
             key = (chrom, pos, ref, alt)
+            if args.max_af is not None and af is not None and af > args.max_af:
+                af_filtered.add(key)
+                continue
             entry = variants.setdefault(key, {"models": set(), "genes": set(), "reasons": set(), "samples": set()})
             entry["models"].add(model_name)
             entry["genes"].add(gene)
@@ -89,7 +110,8 @@ def main():
 
     sys.stderr.write(
         f"[build_alphagenome_input] {len(variants)} unique candidate variant(s) written to {args.output} "
-        f"({n_sv_skipped} symbolic-ALT SV row(s) skipped -- not scored by this pass)\n"
+        f"({n_sv_skipped} symbolic-ALT SV row(s) skipped -- not scored by this pass; "
+        f"{len(af_filtered)} unique variant(s) dropped with gnomAD AF_nfe > {args.max_af})\n"
     )
 
 

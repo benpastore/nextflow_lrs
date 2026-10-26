@@ -522,7 +522,8 @@ workflow alphagenome {
 
             LIFTOVER_ALPHAGENOME_VARIANTS(
                 BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
-                chain_ch, hg38_fai_index
+                chain_ch, hg38_fai_index,
+                file("${params.bin}/flip_ref_alt_alleles.py")
             )
             scoring_vcf_ch = LIFTOVER_ALPHAGENOME_VARIANTS.out.lifted_vcf_ch
             unmapped_ch = LIFTOVER_ALPHAGENOME_VARIANTS.out.unmapped_ch
@@ -559,6 +560,7 @@ workflow alphagenome {
         alphagenome_api_ch = api_scores_ch
         alphagenome_unmapped_ch = unmapped_ch
         hg38_vcf_ch = scoring_vcf_ch       // candidates in hg38 coords (also used for AlphaMissense lookup)
+        candidate_vcf_ch = BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch   // post-SV/AF-filter input, for the variant funnel
 }
 include { VARIANT_REPORT } from '../modules/variant_report/main.nf'
 workflow variant_report {
@@ -569,7 +571,9 @@ workflow variant_report {
         family_json              // path to family.json (mild/severe phenotype per child)
         vcf_manifest             // path: sampleID<TAB>snpeff_vcf_path, one per sample
         vcfs                     // collected list of every sample's snpeff vcf
+        candidate_vcf            // AlphaGenome input VCF (post SV/AF filter), or file("NO_FILE")
         hg38_vcf                 // candidates in hg38 coords, or file("NO_FILE")
+        unmap                    // liftover .unmap file, or file("NO_FILE")
         alphagenome_tsv          // local-backend AlphaGenome scores, or file("NO_FILE")
         alphagenome_api_tsv      // API-backend AlphaGenome scores, or file("NO_FILE")
 
@@ -577,11 +581,12 @@ workflow variant_report {
         VARIANT_REPORT(
             recessive_modifier_tsv, dominant_modifier_tsv, family_json,
             vcf_manifest, vcfs,
-            hg38_vcf, alphagenome_tsv, alphagenome_api_tsv,
+            candidate_vcf, hg38_vcf, unmap, alphagenome_tsv, alphagenome_api_tsv,
             file("${params.bin}/_modifier_common.py"),
             file("${params.bin}/build_variant_report.py")
         )
 
     emit :
         variant_report_ch = VARIANT_REPORT.out.variant_report_ch
+        variant_funnel_ch = VARIANT_REPORT.out.variant_funnel_ch
 }

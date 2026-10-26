@@ -22,6 +22,8 @@ import argparse
 import gzip
 import os
 import sys
+import warnings
+from collections import Counter
 
 
 def opener(path, mode="rt"):
@@ -37,8 +39,10 @@ def get_info_field(info_str, key):
 
 
 def parse_vcf(path):
-    """Yields (vid, chrom, pos, ref, alt, source_model, gene, reason, samples) per
-    record. vid is the VCF ID column -- build_alphagenome_input.py sets it to
+    """Yields (vid, chrom, pos, ref, alt, source_model, gene, reason, samples,
+    flipped) per record -- flipped is the ALLELE_FLIPPED INFO flag set by
+    flip_ref_alt_alleles.py on lifted records where hg38's reference base is
+    the candidate allele. vid is the VCF ID column -- build_alphagenome_input.py sets it to
     the original CHM13 chrom_pos_ref_alt, and CrossMap preserves the ID
     column through liftover unchanged, so it's what ties a lifted hg38
     record back to its original CHM13 candidate (CHROM/POS/REF/ALT
@@ -57,6 +61,7 @@ def parse_vcf(path):
                 get_info_field(info, "GENE"),
                 get_info_field(info, "REASON"),
                 get_info_field(info, "SAMPLES"),
+                "ALLELE_FLIPPED" in info.split(";"),
             )
 
 
@@ -90,6 +95,18 @@ VARIANT_SCORER_KEYS = ["RNA_SEQ", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS", "DNAS
 # only the modalities actually scored, so a tissue term can only resolve if
 # some scored track carries it (otherwise its columns would be silently empty).
 OUTPUT_METADATA_ATTRS = [k.lower() for k in VARIANT_SCORER_KEYS]
+
+# Scorers whose score is signed (ALT vs REF direction). For ALLELE_FLIPPED
+# variants the scored change is hg38 REF (= candidate allele) -> CHM13 REF,
+# i.e. the reverse of carrying the candidate allele, so these are negated.
+# The splice scorers report an unsigned magnitude of change, symmetric
+# under swapping REF/ALT, so they're left as-is.
+SIGNED_SCORERS = {"RNA_SEQ", "DNASE", "ATAC", "CHIP_HISTONE"}
+
+# Scorers whose rows are per gene (tidy_scores gene_name/gene_id), feeding
+# the impacted_genes list. The chromatin scorers are local to the variant,
+# not attributed to a gene.
+GENE_SCORERS = {"RNA_SEQ", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS"}
 
 
 def resolve_ontology_terms(model, dna_client):
@@ -298,16 +315,57 @@ def score_columns():
     return [f"{tissue}_{scorer}" for tissue in ONTOLOGY_TARGETS for scorer in VARIANT_SCORER_KEYS]
 
 
-def summarize_scores(scores, ontology_resolved, variant_scorers_lib):
+def gene_label(row):
+    # tidy_scores leaves missing gene fields as NaN, not None
+    return next((g for g in (row.get("gene_name"), row.get("gene_id")) if isinstance(g, str) and g), "")
+
+
+def impacted_genes(df, ontology_resolved, candidate_genes, threshold):
+    """'GENE*(tissue.SCORER=q|...);GENE(...)' for every gene with a
+    gene-level score at/above threshold in a target tissue -- * marks the
+    variant's candidate gene(s) from the modifier search. Within a gene,
+    the strongest score per tissue x scorer, strongest first; candidate
+    genes first, then by strongest score. Returns (string, n_genes)."""
+    hits = {}  # gene -> {(tissue, scorer): q}
+    for tissue, curie in ontology_resolved.items():
+        if not curie:
+            continue
+        sub = df[(df["ontology_curie"] == curie) & df["scorer"].isin(GENE_SCORERS)
+                 & (df["quantile_score"].abs() >= threshold)]
+        for _, r in sub.iterrows():
+            gene = gene_label(r)
+            if not gene:
+                continue
+            key = (tissue, r["scorer"])
+            q = float(r["quantile_score"])
+            cur = hits.setdefault(gene, {})
+            if key not in cur or abs(q) > abs(cur[key]):
+                cur[key] = q
+
+    def gene_sort(item):
+        gene, scores = item
+        return (gene not in candidate_genes, -max(abs(q) for q in scores.values()))
+
+    parts = []
+    for gene, scores in sorted(hits.items(), key=gene_sort):
+        detail = "|".join(f"{t}.{sc}={q:.3f}" for (t, sc), q in sorted(scores.items(), key=lambda kv: -abs(kv[1])))
+        parts.append(f"{gene}{'*' if gene in candidate_genes else ''}({detail})")
+    return ";".join(parts), len(hits)
+
+
+def summarize_scores(scores, ontology_resolved, variant_scorers_lib, flipped=False, candidate_genes=(), threshold=0.99):
     """
     scores: list[AnnData] from model.score_variant(), one per scorer.
     Returns {tissue_SCORER: signed quantile_score} -- the largest-magnitude
     quantile across that tissue's tracks for that scorer (all genes in the
     window for gene-level scorers, all marks for CHIP_HISTONE) -- plus the
-    single strongest motor-neuron hit across all scorers.
+    single strongest motor-neuron hit across all scorers, and the
+    impacted_genes list (see impacted_genes()). flipped: negate the
+    SIGNED_SCORERS first, so every output describes the candidate allele.
     """
     result = {col: None for col in score_columns()}
-    result.update({"motor_neuron_max_abs": None, "best_output_type": None, "best_track": None})
+    result.update({"motor_neuron_max_abs": None, "best_output_type": None, "best_track": None,
+                   "impacted_genes": "", "n_impacted_genes": 0})
 
     df = variant_scorers_lib.tidy_scores(scores)
     if df is None or "quantile_score" not in df.columns or "ontology_curie" not in df.columns:
@@ -316,6 +374,9 @@ def summarize_scores(scores, ontology_resolved, variant_scorers_lib):
     # output_type may come back as an OutputType enum or "OutputType.RNA_SEQ"
     # -- normalize to the bare name so it matches VARIANT_SCORER_KEYS
     df = df.assign(scorer=df["output_type"].map(lambda o: str(getattr(o, "name", o)).split(".")[-1].upper()))
+    if flipped:
+        signed = df["scorer"].isin(SIGNED_SCORERS)
+        df.loc[signed, "quantile_score"] = -df.loc[signed, "quantile_score"]
 
     for tissue, curie in ontology_resolved.items():
         if not curie:
@@ -329,11 +390,11 @@ def summarize_scores(scores, ontology_resolved, variant_scorers_lib):
             best = sub.loc[sub["quantile_score"].abs().idxmax()]
             result["motor_neuron_max_abs"] = abs(float(best["quantile_score"]))
             result["best_output_type"] = best["scorer"]
-            # tidy_scores leaves missing gene fields as NaN, not None
-            gene = next((g for g in (best.get("gene_name"), best.get("gene_id")) if isinstance(g, str) and g), "")
+            gene = gene_label(best)
             track = str(best.get("track_name", ""))
             result["best_track"] = f"{track}|{gene}" if gene else track
 
+    result["impacted_genes"], result["n_impacted_genes"] = impacted_genes(df, ontology_resolved, candidate_genes, threshold)
     return result
 
 
@@ -358,10 +419,16 @@ def main():
                    help="Directory of pre-downloaded AlphaGenome annotation/calibration files "
                         "(bin/download_alphagenome_resources.sh). Unset = fetch them from GCS at startup.")
     p.add_argument("-window", type=int, default=DEFAULT_WINDOW, help="Sequence context window (bp), resized to the nearest AlphaGenome-supported length")
-    p.add_argument("-quantile_threshold", type=float, default=0.9,
-                   help="Flag large_impact_motor_neuron when any scorer's motor-neuron |quantile_score| is at/above this")
+    p.add_argument("-quantile_threshold", type=float, default=0.99,
+                   help="|quantile_score| at/above which a gene counts as impacted (impacted_genes) and "
+                        "large_impact_motor_neuron is flagged")
     p.add_argument("-output", required=True, help="Output TSV path")
     args = p.parse_args()
+
+    # alphagenome's own tidy_scores() pd.concat trips this on every call
+    # with newer pandas -- harmless, and it floods the log
+    warnings.filterwarnings("ignore", category=FutureWarning,
+                            message="The behavior of DataFrame concatenation with empty or all-NA entries")
 
     if args.backend == "api":
         model, dna_client = load_api_client()
@@ -383,21 +450,22 @@ def main():
     # lift over or failed AlphaGenome scoring -- neither case silently
     # drops a variant from the final table.
     candidates_by_vid = {}
-    for vid, chrom, pos, ref, alt, source_model, gene, reason, samples in parse_vcf(args.candidate_vcf):
+    for vid, chrom, pos, ref, alt, source_model, gene, reason, samples, _flipped in parse_vcf(args.candidate_vcf):
         candidates_by_vid[vid] = {
             "chrom": chrom, "pos": pos, "ref": ref, "alt": alt,
             "source_model": source_model, "gene": gene, "reason": reason, "samples": samples,
         }
 
     lifted_by_vid = {}
-    for vid, chrom, pos, ref, alt, *_ in parse_vcf(args.vcf):
-        lifted_by_vid[vid] = (chrom, pos, ref, alt)
+    for vid, chrom, pos, ref, alt, *_, flipped in parse_vcf(args.vcf):
+        lifted_by_vid[vid] = (chrom, pos, ref, alt, flipped)
 
     columns = [
         "VID", "ORIG_CHROM", "ORIG_POS", "ORIG_REF", "ORIG_ALT",
         "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT",
-        "SOURCE_MODEL", "GENE", "REASON", "SAMPLES", "status", "note",
+        "SOURCE_MODEL", "GENE", "REASON", "SAMPLES", "status", "allele_flipped", "note",
         *score_columns(),
+        "n_impacted_genes", "impacted_genes",
         "motor_neuron_max_abs", "best_output_type", "best_track", "large_impact_motor_neuron",
     ]
 
@@ -410,6 +478,8 @@ def main():
         out.write("\t".join(fmt(row.get(c)) for c in columns) + "\n")
 
     n_scored = 0
+    n_flipped = 0
+    partial_counts = Counter()
     n_liftover_failed = 0
     n_scoring_failed = 0
     with open(args.output, "w") as out:
@@ -428,12 +498,15 @@ def main():
                 write_row(out, {**row, "status": "liftover_failed"})
                 continue
 
-            chrom, pos, ref, alt = lifted_by_vid[vid]
-            row.update({"HG38_CHROM": chrom, "HG38_POS": pos, "HG38_REF": ref, "HG38_ALT": alt})
+            chrom, pos, ref, alt, flipped = lifted_by_vid[vid]
+            row.update({"HG38_CHROM": chrom, "HG38_POS": pos, "HG38_REF": ref, "HG38_ALT": alt,
+                        "allele_flipped": flipped})
             try:
                 scores, failed_scorers = score_variant(model, genome_mod, dna_client, variant_scorers, chrom_sizes,
                                                        chrom, pos, ref, alt, args.window)
-                summary = summarize_scores(scores, ontology_resolved, variant_scorers_lib)
+                summary = summarize_scores(scores, ontology_resolved, variant_scorers_lib, flipped=flipped,
+                                           candidate_genes=set(filter(None, meta["gene"].split(","))),
+                                           threshold=args.quantile_threshold)
             except Exception as e:
                 sys.stderr.write(f"[run_alphagenome] WARNING: scoring failed for {vid} ({chrom}:{pos}:{ref}>{alt}): {e}\n")
                 n_scoring_failed += 1
@@ -442,19 +515,31 @@ def main():
                 continue
 
             mn_max = summary["motor_neuron_max_abs"]
-            note = ""
+            notes = []
+            if flipped:
+                # signed scores already inverted inside summarize_scores()
+                n_flipped += 1
+                notes.append("hg38 ref = candidate allele; scored hg38ref>CHM13ref, signed scores inverted")
             if failed_scorers:
-                note = "partial; " + "; ".join(failed_scorers)
-                sys.stderr.write(f"[run_alphagenome] NOTE: {vid} scored without {', '.join(f.split(':')[0] for f in failed_scorers)}\n")
+                # one summary line at the end instead of a log line per variant
+                partial_counts.update(f.split(":")[0] for f in failed_scorers)
+                notes.append("partial; " + "; ".join(failed_scorers))
+            note = " | ".join(notes)
 
             write_row(out, {
                 **row, **summary, "status": "scored", "note": note,
                 "large_impact_motor_neuron": mn_max is not None and mn_max >= args.quantile_threshold,
             })
             n_scored += 1
+            if n_scored % 500 == 0:
+                sys.stderr.write(f"[run_alphagenome] progress: {n_scored} scored / {len(candidates_by_vid)} candidates\n")
 
+    for scorer, n in sorted(partial_counts.items()):
+        sys.stderr.write(f"[run_alphagenome] {scorer} failed for {n} variant(s) scored with the remaining scorers "
+                         f"(reason in each row's note column)\n")
     sys.stderr.write(
-        f"[run_alphagenome] {len(candidates_by_vid)} total candidate(s): {n_scored} scored, "
+        f"[run_alphagenome] {len(candidates_by_vid)} total candidate(s): {n_scored} scored "
+        f"({n_flipped} allele-flipped), "
         f"{n_liftover_failed} failed liftover, {n_scoring_failed} failed scoring -> {args.output}\n"
     )
 

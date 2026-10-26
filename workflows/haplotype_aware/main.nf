@@ -95,14 +95,18 @@ def helpMessage() {
     --hg38_genome [fasta]               hg38 reference FASTA (AlphaGenome's training build). Required if either AlphaGenome step is on AND --genome_version is "T2T"
     --genome_version [T2T|HG38]         Which assembly --genome actually is (default: "T2T"). Controls whether the alphagenome step lifts candidates to hg38 first (T2T) or skips liftover entirely (HG38, when --genome is already hg38)
     --chm13_to_hg38_chain [chain]       CHM13(hs1)->hg38 liftover chain file. Optional -- auto-fetched from UCSC if unset (fails loudly if your compute nodes lack internet access; fetch it once from a login node and set this instead if so)
-    --alphagenome_quantile_threshold [float]  |quantile_score| cutoff for large_impact_motor_neuron (default: 0.9)
+    --alphagenome_quantile_threshold [float]  |quantile_score| cutoff for impacted_genes and large_impact_motor_neuron (default: 0.99)
+    --alphagenome_max_af [float]        Skip AlphaGenome for candidates with gnomAD AF_nfe above this; unannotated AF always kept (default: 0.40, "" = off)
     --alphamissense_tsv [tsv.gz]        AlphaMissense_hg38.tsv.gz for missense pathogenicity in the final report (default: "" = skipped)
 
     Final report (<results>/09_variant_report/cohort.variant_report.tsv) is written whenever the modifier search runs --
     one row per candidate variant joining modifier info, mild/severe carriers, gnomAD AF, snpEff, AlphaMissense, AlphaGenome.
+    Alongside it, cohort.variant_funnel.tsv counts the variants entering/leaving each step.
     --alphagenome_args [str]            Extra raw args appended to the alphagenome command line
 
     Misc:
+    --run_read_length_plot [bool]       Publication-quality read-length histogram + N50 per sample, <results>/00_qc/read_length (default: true)
+    --read_length_plot_args [str]       Extra args for bin/plot_read_length.py, e.g. "-width 3.5 -height 2.6 -font_size 8"
     --publish_mode [str]                Nextflow publishDir mode used by most processes (default: 'copy')
     --outprefix [str]                   Output prefix (default: 'ONT_ANALYSIS' if unset)
     --debug [bool]                      Verbose logging / channel .view() calls (default: true)
@@ -128,6 +132,7 @@ nextflow.enable.dsl=2
 /* include modules */
 include { DESIGN_INPUT } from '../../modules/parse_design/main.nf'
 include { NANOPLOT_RAW } from '../../modules/nanoplot/main.nf'
+include { READ_LENGTH_PLOT } from '../../modules/read_length_plot/main.nf'
 include { INDEX_REFERENCE } from '../../modules/samtools/main.nf'
 include { INDEX_REFERENCE as INDEX_HG38_REFERENCE } from '../../modules/samtools/main.nf'
 
@@ -301,6 +306,13 @@ workflow {
 
     /////////////////// prelim QC on nanopore reads (always on raw reads, before HERRO correction)
     NANOPLOT_RAW( ont_ch )
+
+    // publication-quality read-length histogram with N50 (same reads as
+    // NanoPlot). Leaf step -- nothing consumes its output, so it never
+    // invalidates anything else's cache.
+    if (params.run_read_length_plot) {
+        READ_LENGTH_PLOT( ont_ch, file("${params.bin}/plot_read_length.py") )
+    }
 
     ////////////////// METHYLATION (raw-read alignment) /////////////////////
     // real MM/ML methylation tags only survive on the raw (pre-herro) reads
@@ -566,6 +578,8 @@ workflow {
                 // Input prep + liftover also runs when only AlphaMissense is
                 // configured, since its lookup needs hg38 coordinates.
                 hg38_vcf_ch = Channel.empty()
+                candidate_vcf_ch = Channel.empty()
+                unmap_ch = Channel.empty()
                 alphagenome_ch = Channel.empty()
                 alphagenome_api_ch = Channel.empty()
                 if (params.run_alphagenome || params.run_alphagenome_api || params.alphamissense_tsv) {
@@ -593,6 +607,8 @@ workflow {
                         skip_liftover
                     )
                     hg38_vcf_ch = alphagenome.out.hg38_vcf_ch
+                    candidate_vcf_ch = alphagenome.out.candidate_vcf_ch
+                    unmap_ch = alphagenome.out.alphagenome_unmapped_ch
                     alphagenome_ch = alphagenome.out.alphagenome_ch
                     alphagenome_api_ch = alphagenome.out.alphagenome_api_ch
                 }
@@ -607,7 +623,9 @@ workflow {
                     file(params.family_json),
                     vcf_manifest_ch,
                     vcfs_ch,
+                    candidate_vcf_ch.ifEmpty(file("NO_FILE")),
                     hg38_vcf_ch.ifEmpty(file("NO_FILE")),
+                    unmap_ch.ifEmpty(file("NO_FILE")),
                     alphagenome_ch.ifEmpty(file("NO_FILE")),
                     alphagenome_api_ch.ifEmpty(file("NO_FILE"))
                 )

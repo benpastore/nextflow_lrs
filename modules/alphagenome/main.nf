@@ -83,6 +83,7 @@ process BUILD_ALPHAGENOME_INPUT {
     python3 ${script} \\
         -recessive_tsv ${recessive_tsv} \\
         -dominant_tsv ${dominant_tsv} \\
+        ${params.alphagenome_max_af != null && params.alphagenome_max_af != '' ? "-max_af ${params.alphagenome_max_af}" : ''} \\
         -output candidate_variants.chm13.vcf
     """
 }
@@ -96,6 +97,7 @@ process LIFTOVER_ALPHAGENOME_VARIANTS {
         path(vcf)
         path(chain)
         tuple path(hg38_genome), path(hg38_genome_fai)
+        path(flip_script)
 
     output:
         path("candidate_variants.hg38.vcf"), emit: lifted_vcf_ch
@@ -106,7 +108,21 @@ process LIFTOVER_ALPHAGENOME_VARIANTS {
     #!/bin/bash
     set -euo pipefail
 
-    CrossMap vcf ${chain} ${vcf} ${hg38_genome} candidate_variants.hg38.vcf
+    # --no-comp-alleles: keep records where hg38's reference base equals the
+    # candidate's ALT (CHM13 and hg38 carry different alleles there) instead
+    # of failing them as REF==ALT -- flip_ref_alt_alleles.py then rewrites
+    # them as hg38 REF (= candidate allele) > CHM13 REF, tagged ALLELE_FLIPPED.
+    CrossMap vcf --no-comp-alleles ${chain} ${vcf} ${hg38_genome} candidate_variants.hg38.raw.vcf
+    if [ -f candidate_variants.hg38.raw.vcf.unmap ]; then
+        mv candidate_variants.hg38.raw.vcf.unmap candidate_variants.hg38.vcf.unmap
+    fi
+
+    python3 ${flip_script} \\
+        -original_vcf ${vcf} \\
+        -lifted_vcf candidate_variants.hg38.raw.vcf \\
+        -unmap candidate_variants.hg38.vcf.unmap \\
+        -output candidate_variants.hg38.vcf
+    rm candidate_variants.hg38.raw.vcf
 
     n_unmapped=0
     if [ -f candidate_variants.hg38.vcf.unmap ]; then
@@ -144,7 +160,7 @@ process ALPHAGENOME {
         -reference ${hg38_genome} \\
         -weights ${params.alphagenome_weights} \\
         ${params.alphagenome_resources ? "-resources ${params.alphagenome_resources}" : ''} \\
-        -quantile_threshold ${params.alphagenome_quantile_threshold ?: 0.9} \\
+        -quantile_threshold ${params.alphagenome_quantile_threshold ?: 0.99} \\
         ${params.alphagenome_args ?: ''} \\
         -output cohort.alphagenome.tsv
     """
@@ -186,7 +202,7 @@ process ALPHAGENOME_API {
         -candidate_vcf ${candidate_vcf} \\
         -vcf ${vcf} \\
         -reference ${hg38_genome} \\
-        -quantile_threshold ${params.alphagenome_quantile_threshold ?: 0.9} \\
+        -quantile_threshold ${params.alphagenome_quantile_threshold ?: 0.99} \\
         ${params.alphagenome_args ?: ''} \\
         -output cohort.alphagenome_api.tsv
     """
