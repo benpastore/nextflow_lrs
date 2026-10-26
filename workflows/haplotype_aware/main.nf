@@ -87,9 +87,12 @@ def helpMessage() {
 
     AlphaGenome functional scoring of recessive_modifier/dominant_modifier PASS candidates
     (motor-neuron-focused; requires --run_snpeff and --family_json):
-    --run_alphagenome [bool]            (default: false)
+    --run_alphagenome [bool]            Local GPU inference (default: false)
+    --run_alphagenome_api [bool]        Backup: score via DeepMind's hosted API instead, published to 08_annotation/alphagenome_api (default: false).
+                                         Needs internet on compute nodes and `nextflow secrets set ALPHAGENOME_API_KEY <key>`. Can run alongside --run_alphagenome
     --alphagenome_weights [dir]         Local Kaggle AlphaGenome weights dir. Required if --run_alphagenome is true
-    --hg38_genome [fasta]               hg38 reference FASTA (AlphaGenome's training build). Required if --run_alphagenome is true AND --genome_version is "T2T"
+    --alphagenome_resources [dir]       Pre-downloaded AlphaGenome annotation/calibration files (bin/download_alphagenome_resources.sh). "" = fetch from GCS at runtime
+    --hg38_genome [fasta]               hg38 reference FASTA (AlphaGenome's training build). Required if either AlphaGenome step is on AND --genome_version is "T2T"
     --genome_version [T2T|HG38]         Which assembly --genome actually is (default: "T2T"). Controls whether the alphagenome step lifts candidates to hg38 first (T2T) or skips liftover entirely (HG38, when --genome is already hg38)
     --chm13_to_hg38_chain [chain]       CHM13(hs1)->hg38 liftover chain file. Optional -- auto-fetched from UCSC if unset (fails loudly if your compute nodes lack internet access; fetch it once from a login node and set this instead if so)
     --alphagenome_quantile_threshold [float]  |quantile_score| cutoff for large_impact_motor_neuron (default: 0.9)
@@ -555,8 +558,8 @@ workflow {
                 // alphagenome workflow. params.chm13_to_hg38_chain is optional in T2T
                 // mode: if unset, the chain is fetched automatically
                 // (FETCH_CHM13_TO_HG38_CHAIN, modules/alphagenome/main.nf).
-                if (params.run_alphagenome) {
-                    if (!params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
+                if (params.run_alphagenome || params.run_alphagenome_api) {
+                    if (params.run_alphagenome && !params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
                     if (!(params.genome_version in ['T2T', 'HG38'])) {
                         exit 1, "params.genome_version must be 'T2T' or 'HG38' (got: ${params.genome_version})"
                     }

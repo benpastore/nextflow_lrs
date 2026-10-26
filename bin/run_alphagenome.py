@@ -104,6 +104,10 @@ def resolve_ontology_terms(model, dna_client):
 
     resolved = {}
     for key, spec in ONTOLOGY_TARGETS.items():
+        # A name match must not reuse a term another target already took --
+        # otherwise e.g. "neuron" matches "motor neuron" and the neuron
+        # column just duplicates motor_neuron.
+        taken = {c for c in resolved.values() if c}
         found_curie = None
         for df in dfs:
             if found_curie:
@@ -113,7 +117,8 @@ def resolve_ontology_terms(model, dna_client):
                 break
             if "biosample_name" in df.columns:
                 for needle in spec["name_contains"]:
-                    hit = df[df["biosample_name"].str.contains(needle, case=False, na=False)]
+                    hit = df[df["biosample_name"].str.contains(needle, case=False, na=False)
+                             & ~df["ontology_curie"].isin(taken)]
                     if len(hit):
                         found_curie = hit.iloc[0]["ontology_curie"]
                         break
@@ -148,7 +153,41 @@ def find_checkpoint(weights_dir, model_version="all_folds"):
     return weights_dir
 
 
-def load_model(weights_dir):
+# OrganismSettings field -> filename, matching the basenames of
+# alphagenome_research's default Google Cloud Storage URLs (see
+# bin/download_alphagenome_resources.sh, which fetches exactly these).
+RESOURCE_FILES = {
+    "gtf_feather_path": "gencode.v46.annotation.gtf.gz.feather",
+    "pas_feather_path": "polyadb_human_v3_exon3_contiguous_gtfv46.feather",
+    "splice_site_starts_feather_path": "gencode.v46.splice_sites_starts.feather",
+    "splice_site_ends_feather_path": "gencode.v46.splice_sites_ends.feather",
+    "calibration_path": "calibration_scores.pb",
+}
+
+
+def build_organism_settings(dna_model, dna_client, reference, resources_dir):
+    """Start from alphagenome_research's default hg38 settings (all remote
+    GCS URLs) and swap in local files: the FASTA is always the pipeline's
+    own hg38 reference; the annotation/calibration files come from
+    resources_dir when given. Any file missing from resources_dir keeps its
+    remote default, so a partial download degrades to network access rather
+    than silently disabling the scorers that depend on it."""
+    import dataclasses
+    human = dna_client.Organism.HOMO_SAPIENS
+    settings = dict(dna_model.default_organism_settings())
+    overrides = {"fasta_path": reference}
+    if resources_dir:
+        for field, fname in RESOURCE_FILES.items():
+            path = os.path.join(resources_dir, fname)
+            if os.path.isfile(path):
+                overrides[field] = path
+            else:
+                sys.stderr.write(f"[run_alphagenome] WARNING: {path} not found -- {field} falls back to remote default\n")
+    settings[human] = dataclasses.replace(settings[human], **overrides)
+    return settings
+
+
+def load_model(weights_dir, reference, resources_dir):
     """Load AlphaGenome for local inference against a pre-downloaded Kaggle weights cache.
 
     Calls dna_model.create() on the local checkpoint directly rather than
@@ -160,8 +199,25 @@ def load_model(weights_dir):
     from alphagenome.models import dna_client
     checkpoint = find_checkpoint(weights_dir)
     sys.stderr.write(f"[run_alphagenome] loading checkpoint: {checkpoint}\n")
-    model = dna_model.create(checkpoint)
+    organism_settings = build_organism_settings(dna_model, dna_client, reference, resources_dir)
+    model = dna_model.create(checkpoint, organism_settings=organism_settings)
     return model, dna_client
+
+
+def load_api_client():
+    """Hosted DeepMind API backend (backup for when local GPU inference
+    isn't available). Same score_variant()/output_metadata() interface as
+    the local model, so everything downstream is shared. Sequence and
+    annotations come from DeepMind's side -- -reference is only used for
+    chromosome lengths (window clamping). Needs internet from the compute
+    node and ALPHAGENOME_API_KEY in the environment (a Nextflow secret,
+    see ALPHAGENOME_API in modules/alphagenome/main.nf)."""
+    from alphagenome.models import dna_client
+    api_key = os.environ.get("ALPHAGENOME_API_KEY")
+    if not api_key:
+        sys.exit("[run_alphagenome] FATAL: -backend api needs ALPHAGENOME_API_KEY set in the environment")
+    sys.stderr.write("[run_alphagenome] using hosted AlphaGenome API\n")
+    return dna_client.create(api_key), dna_client
 
 
 # AlphaGenome requires one of a small set of fixed interval sizes. Default
@@ -172,13 +228,29 @@ def load_model(weights_dir):
 DEFAULT_WINDOW = 131_072
 
 
-def resize_interval(genome_mod, dna_client, chrom, pos, window):
+def load_chrom_sizes(fai_path):
+    sizes = {}
+    with open(fai_path) as f:
+        for line in f:
+            fields = line.split("\t")
+            sizes[fields[0]] = int(fields[1])
+    return sizes
+
+
+def resize_interval(genome_mod, dna_client, chrom_sizes, chrom, pos, window):
     # dict of name -> length, e.g. {'SEQUENCE_LENGTH_100KB': 131072, ...}
     supported = getattr(dna_client, "SUPPORTED_SEQUENCE_LENGTHS", None)
     if supported:
         window = min(supported.values(), key=lambda length: abs(length - window))
-    half = window // 2
-    return genome_mod.Interval(chromosome=chrom, start=max(0, pos - half), end=pos + half)
+    # The model only accepts exactly-supported lengths, so near a chromosome
+    # end shift the window inward rather than truncating it (a truncated
+    # window breaks the model with incompatible-shape errors).
+    start = pos - window // 2
+    chrom_len = chrom_sizes.get(chrom)
+    if chrom_len is not None:
+        start = min(start, chrom_len - window)
+    start = max(0, start)
+    return genome_mod.Interval(chromosome=chrom, start=start, end=start + window)
 
 
 # Expression + splicing scorers only. score_variant() scores every track;
@@ -186,15 +258,38 @@ def resize_interval(genome_mod, dna_client, chrom, pos, window):
 VARIANT_SCORER_KEYS = ["RNA_SEQ", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS"]
 
 
-def score_variant(model, genome_mod, dna_client, variant_scorers, chrom, pos, ref, alt, window):
-    interval = resize_interval(genome_mod, dna_client, chrom, pos, window)
+def score_variant(model, genome_mod, dna_client, variant_scorers, chrom_sizes, chrom, pos, ref, alt, window):
+    """Returns (scores, failed_scorer_notes). Tries all scorers in one pass;
+    if that raises (e.g. SpliceJunctionScorer errors when no junctions fall
+    in the window), retries each scorer alone so one scorer's failure
+    doesn't throw away the others' results. Raises only if every scorer fails."""
+    interval = resize_interval(genome_mod, dna_client, chrom_sizes, chrom, pos, window)
     variant = genome_mod.Variant(chromosome=chrom, position=pos, reference_bases=ref, alternate_bases=alt)
-    return model.score_variant(
-        interval=interval,
-        variant=variant,
-        variant_scorers=variant_scorers,
-        organism=dna_client.Organism.HOMO_SAPIENS,
-    )
+
+    def run(scorers):
+        return model.score_variant(
+            interval=interval,
+            variant=variant,
+            variant_scorers=scorers,
+            organism=dna_client.Organism.HOMO_SAPIENS,
+        )
+
+    try:
+        return run(variant_scorers), []
+    except Exception:
+        if len(variant_scorers) == 1:
+            raise
+
+    scores, failed, last_err = [], [], None
+    for key, scorer in zip(VARIANT_SCORER_KEYS, variant_scorers):
+        try:
+            scores.extend(run([scorer]))
+        except Exception as e:
+            failed.append(f"{key}: {' '.join(str(e).split())}")
+            last_err = e
+    if not scores:
+        raise last_err
+    return scores, failed
 
 
 def summarize_scores(scores, ontology_resolved, variant_scorers_lib):
@@ -247,18 +342,30 @@ def main():
     p.add_argument("-vcf", required=True,
                    help="Candidate VCF in hg38 coordinates -- lifted (T2T mode) or the same file "
                         "as -candidate_vcf (HG38 mode, liftover skipped).")
-    p.add_argument("-reference", required=True, help="hg38 reference FASTA")
-    p.add_argument("-weights", required=True, help="Pre-downloaded local Kaggle AlphaGenome weights directory")
+    p.add_argument("-reference", required=True, help="hg38 reference FASTA (with .fai alongside) -- used as the model's sequence source")
+    p.add_argument("-backend", choices=["local", "api"], default="local",
+                   help="local = GPU inference against -weights; api = hosted DeepMind API "
+                        "(needs ALPHAGENOME_API_KEY and internet; -weights/-resources ignored)")
+    p.add_argument("-weights", help="Pre-downloaded local Kaggle AlphaGenome weights directory (required for -backend local)")
+    p.add_argument("-resources", default="",
+                   help="Directory of pre-downloaded AlphaGenome annotation/calibration files "
+                        "(bin/download_alphagenome_resources.sh). Unset = fetch them from GCS at startup.")
     p.add_argument("-window", type=int, default=DEFAULT_WINDOW, help="Sequence context window (bp), resized to the nearest AlphaGenome-supported length")
     p.add_argument("-quantile_threshold", type=float, default=0.9, help="|quantile_score| at/above which a variant is flagged large_impact_motor_neuron")
     p.add_argument("-output", required=True, help="Output TSV path")
     args = p.parse_args()
 
-    model, dna_client = load_model(args.weights)
+    if args.backend == "api":
+        model, dna_client = load_api_client()
+    else:
+        if not args.weights:
+            p.error("-weights is required for -backend local")
+        model, dna_client = load_model(args.weights, args.reference, args.resources)
     from alphagenome.data import genome as genome_mod
     from alphagenome.models import variant_scorers as variant_scorers_lib
     variant_scorers = [variant_scorers_lib.RECOMMENDED_VARIANT_SCORERS[k] for k in VARIANT_SCORER_KEYS]
     ontology_resolved = resolve_ontology_terms(model, dna_client)
+    chrom_sizes = load_chrom_sizes(args.reference + ".fai")
 
     # Reconcile against the full pre-liftover candidate list, keyed by VCF
     # ID (CrossMap preserves it unchanged through liftover; CHROM/POS/REF/ALT
@@ -308,7 +415,8 @@ def main():
             chrom, pos, ref, alt = lifted_by_vid[vid]
             base_row += [chrom, str(pos), ref, alt, meta["source_model"], meta["gene"], meta["reason"], meta["samples"]]
             try:
-                scores = score_variant(model, genome_mod, dna_client, variant_scorers, chrom, pos, ref, alt, args.window)
+                scores, failed_scorers = score_variant(model, genome_mod, dna_client, variant_scorers, chrom_sizes,
+                                                       chrom, pos, ref, alt, args.window)
                 summary = summarize_scores(scores, ontology_resolved, variant_scorers_lib)
             except Exception as e:
                 sys.stderr.write(f"[run_alphagenome] WARNING: scoring failed for {vid} ({chrom}:{pos}:{ref}>{alt}): {e}\n")
@@ -320,8 +428,13 @@ def main():
             mn_score = summary["motor_neuron_quantile_score"]
             large_impact = mn_score is not None and abs(mn_score) >= args.quantile_threshold
 
+            note = ""
+            if failed_scorers:
+                note = "partial; " + "; ".join(failed_scorers)
+                sys.stderr.write(f"[run_alphagenome] NOTE: {vid} scored without {', '.join(f.split(':')[0] for f in failed_scorers)}\n")
+
             out.write("\t".join(base_row + [
-                "scored", "",
+                "scored", note,
                 "" if summary["motor_neuron_quantile_score"] is None else f"{summary['motor_neuron_quantile_score']:.4f}",
                 "" if summary["spinal_cord_quantile_score"] is None else f"{summary['spinal_cord_quantile_score']:.4f}",
                 "" if summary["neuron_quantile_score"] is None else f"{summary['neuron_quantile_score']:.4f}",

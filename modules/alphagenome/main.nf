@@ -143,8 +143,51 @@ process ALPHAGENOME {
         -vcf ${vcf} \\
         -reference ${hg38_genome} \\
         -weights ${params.alphagenome_weights} \\
+        ${params.alphagenome_resources ? "-resources ${params.alphagenome_resources}" : ''} \\
         -quantile_threshold ${params.alphagenome_quantile_threshold ?: 0.9} \\
         ${params.alphagenome_args ?: ''} \\
         -output cohort.alphagenome.tsv
+    """
+}
+
+process ALPHAGENOME_API {
+
+    // Backup to ALPHAGENOME: same script and inputs, but scores via
+    // DeepMind's hosted API instead of local GPU inference. CPU-only, but
+    // needs internet from the compute node. Publishes to its own dir so it
+    // can run alongside ALPHAGENOME without clobbering its output.
+    //
+    // API key via a Nextflow secret, so it never lands in .command.sh or
+    // the work dir. Set it once on OSC:
+    //   nextflow secrets set ALPHAGENOME_API_KEY <your key>
+    label 'alphagenome_api'
+    publishDir "${params.results}/08_annotation/alphagenome_api", mode: params.publish_mode
+    secret 'ALPHAGENOME_API_KEY'
+
+    input:
+        path(candidate_vcf)
+        path(vcf)
+        tuple path(hg38_genome), path(hg38_genome_fai)
+        path(script)
+
+    output:
+        path("cohort.alphagenome_api.tsv"), emit: alphagenome_api_ch
+
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    # \$HOME is read-only inside the container
+    export MPLCONFIGDIR=\$PWD/.matplotlib
+
+    python3 ${script} \\
+        -backend api \\
+        -candidate_vcf ${candidate_vcf} \\
+        -vcf ${vcf} \\
+        -reference ${hg38_genome} \\
+        -quantile_threshold ${params.alphagenome_quantile_threshold ?: 0.9} \\
+        ${params.alphagenome_args ?: ''} \\
+        -output cohort.alphagenome_api.tsv
     """
 }

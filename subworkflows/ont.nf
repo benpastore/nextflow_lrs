@@ -489,7 +489,7 @@ workflow recessive_modifier {
         dominant_modifier_gene_summary_ch = RECESSIVE_MODIFIER.out.dominant_modifier_gene_summary_ch
 }
 
-include { FETCH_CHM13_TO_HG38_CHAIN; BUILD_ALPHAGENOME_INPUT; LIFTOVER_ALPHAGENOME_VARIANTS; ALPHAGENOME } from '../modules/alphagenome/main.nf'
+include { FETCH_CHM13_TO_HG38_CHAIN; BUILD_ALPHAGENOME_INPUT; LIFTOVER_ALPHAGENOME_VARIANTS; ALPHAGENOME; ALPHAGENOME_API } from '../modules/alphagenome/main.nf'
 workflow alphagenome {
 
     take :
@@ -528,14 +528,33 @@ workflow alphagenome {
             unmapped_ch = LIFTOVER_ALPHAGENOME_VARIANTS.out.unmapped_ch
         }
 
-        ALPHAGENOME(
-            BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
-            scoring_vcf_ch,
-            hg38_fai_index,
-            file("${params.bin}/run_alphagenome.py")
-        )
+        // Local GPU inference and the hosted-API backup are independent --
+        // either, both, or (pointlessly) neither; they share the input prep
+        // above and publish to separate dirs.
+        local_scores_ch = Channel.empty()
+        if (params.run_alphagenome) {
+            ALPHAGENOME(
+                BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
+                scoring_vcf_ch,
+                hg38_fai_index,
+                file("${params.bin}/run_alphagenome.py")
+            )
+            local_scores_ch = ALPHAGENOME.out.alphagenome_ch
+        }
+
+        api_scores_ch = Channel.empty()
+        if (params.run_alphagenome_api) {
+            ALPHAGENOME_API(
+                BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
+                scoring_vcf_ch,
+                hg38_fai_index,
+                file("${params.bin}/run_alphagenome.py")
+            )
+            api_scores_ch = ALPHAGENOME_API.out.alphagenome_api_ch
+        }
 
     emit :
-        alphagenome_ch = ALPHAGENOME.out.alphagenome_ch
+        alphagenome_ch = local_scores_ch
+        alphagenome_api_ch = api_scores_ch
         alphagenome_unmapped_ch = unmapped_ch
 }
