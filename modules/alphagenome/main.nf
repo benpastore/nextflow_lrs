@@ -108,21 +108,31 @@ process LIFTOVER_ALPHAGENOME_VARIANTS {
     #!/bin/bash
     set -euo pipefail
 
-    # --no-comp-alleles: keep records where hg38's reference base equals the
-    # candidate's ALT (CHM13 and hg38 carry different alleles there) instead
-    # of failing them as REF==ALT -- flip_ref_alt_alleles.py then rewrites
-    # them as hg38 REF (= candidate allele) > CHM13 REF, tagged ALLELE_FLIPPED.
-    CrossMap vcf --no-comp-alleles ${chain} ${vcf} ${hg38_genome} candidate_variants.hg38.raw.vcf
-    if [ -f candidate_variants.hg38.raw.vcf.unmap ]; then
-        mv candidate_variants.hg38.raw.vcf.unmap candidate_variants.hg38.vcf.unmap
+    CrossMap vcf ${chain} ${vcf} ${hg38_genome} candidate_variants.hg38.raw.vcf
+    touch candidate_variants.hg38.raw.vcf.unmap
+
+    # Fail(REF==ALT): hg38's reference base IS the candidate's ALT (CHM13 and
+    # hg38 carry different alleles there). CrossMap 0.7.4 drops these before
+    # --no-comp-alleles is even checked, and the .unmap keeps only the CHM13
+    # record -- so lift just their positions with bed mode (coordinates only,
+    # no allele logic; strand in column 6) and let flip_ref_alt_alleles.py
+    # rewrite them as hg38 REF (= candidate allele) > CHM13 REF.
+    awk -F'\\t' 'BEGIN{OFS="\\t"} \$NF=="Fail(REF==ALT)" && length(\$4)==1 && length(\$5)==1 {print \$1, \$2-1, \$2, \$3, 0, "+"}' \\
+        candidate_variants.hg38.raw.vcf.unmap > ref_eq_alt.chm13.bed
+    if [ -s ref_eq_alt.chm13.bed ]; then
+        CrossMap bed ${chain} ref_eq_alt.chm13.bed ref_eq_alt.hg38.bed
     fi
+    touch ref_eq_alt.hg38.bed
 
     python3 ${flip_script} \\
         -original_vcf ${vcf} \\
         -lifted_vcf candidate_variants.hg38.raw.vcf \\
-        -unmap candidate_variants.hg38.vcf.unmap \\
-        -output candidate_variants.hg38.vcf
-    rm candidate_variants.hg38.raw.vcf
+        -unmap_in candidate_variants.hg38.raw.vcf.unmap \\
+        -lifted_bed ref_eq_alt.hg38.bed \\
+        -reference ${hg38_genome} \\
+        -output candidate_variants.hg38.vcf \\
+        -unmap_out candidate_variants.hg38.vcf.unmap
+    rm candidate_variants.hg38.raw.vcf candidate_variants.hg38.raw.vcf.unmap
 
     n_unmapped=0
     if [ -f candidate_variants.hg38.vcf.unmap ]; then
@@ -134,17 +144,21 @@ process LIFTOVER_ALPHAGENOME_VARIANTS {
 
 process ALPHAGENOME {
 
+    // One task per chunk of candidates (params.alphagenome_chunk_size), so
+    // a cohort's scoring spreads across several GPU jobs instead of one
+    // long one that hits the time limit -- the model scores one variant at a
+    // time (~1 s/variant on GPU), there's no batching within a process. A
+    // failed chunk reruns alone on -resume. Chunk outputs aren't published;
+    // MERGE_ALPHAGENOME_CHUNKS joins them into cohort.alphagenome.tsv.
     label 'alphagenome'
-    publishDir "${params.results}/08_annotation/alphagenome", mode: params.publish_mode
+    tag "chunk ${chunk_index + 1}/${n_chunks}"
 
     input:
-        path(candidate_vcf)
-        path(vcf)
-        tuple path(hg38_genome), path(hg38_genome_fai)
+        tuple val(chunk_index), val(n_chunks), path(candidate_vcf), path(vcf), path(hg38_genome), path(hg38_genome_fai)
         path(script)
 
     output:
-        path("cohort.alphagenome.tsv"), emit: alphagenome_ch
+        path("cohort.alphagenome.chunk_*.tsv"), emit: alphagenome_chunk_ch
 
     script:
     """
@@ -161,8 +175,38 @@ process ALPHAGENOME {
         -weights ${params.alphagenome_weights} \\
         ${params.alphagenome_resources ? "-resources ${params.alphagenome_resources}" : ''} \\
         -quantile_threshold ${params.alphagenome_quantile_threshold ?: 0.99} \\
+        -chunk_index ${chunk_index} \\
+        -n_chunks ${n_chunks} \\
         ${params.alphagenome_args ?: ''} \\
-        -output cohort.alphagenome.tsv
+        -output cohort.alphagenome.chunk_${String.format('%05d', chunk_index)}.tsv
+    """
+}
+
+process MERGE_ALPHAGENOME_CHUNKS {
+
+    // Chunks are contiguous slices of the VID-sorted candidates and their
+    // filenames are zero-padded, so concatenating in filename order gives
+    // the same row order a single unchunked run would.
+    label 'low'
+    publishDir "${params.results}/08_annotation/alphagenome", mode: params.publish_mode
+
+    input:
+        path(chunks)
+
+    output:
+        path("cohort.alphagenome.tsv"), emit: alphagenome_ch
+
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+
+    files=\$(ls cohort.alphagenome.chunk_*.tsv | sort)
+    head -n 1 \$(echo "\$files" | head -n 1) > cohort.alphagenome.tsv
+    for f in \$files; do
+        tail -n +2 "\$f" >> cohort.alphagenome.tsv
+    done
+    echo "[MERGE_ALPHAGENOME_CHUNKS] \$(echo "\$files" | wc -l) chunk(s), \$(( \$(wc -l < cohort.alphagenome.tsv) - 1 )) row(s)" >&2
     """
 }
 

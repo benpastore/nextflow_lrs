@@ -489,7 +489,7 @@ workflow recessive_modifier {
         dominant_modifier_gene_summary_ch = RECESSIVE_MODIFIER.out.dominant_modifier_gene_summary_ch
 }
 
-include { FETCH_CHM13_TO_HG38_CHAIN; BUILD_ALPHAGENOME_INPUT; LIFTOVER_ALPHAGENOME_VARIANTS; ALPHAGENOME; ALPHAGENOME_API } from '../modules/alphagenome/main.nf'
+include { FETCH_CHM13_TO_HG38_CHAIN; BUILD_ALPHAGENOME_INPUT; LIFTOVER_ALPHAGENOME_VARIANTS; ALPHAGENOME; MERGE_ALPHAGENOME_CHUNKS; ALPHAGENOME_API } from '../modules/alphagenome/main.nf'
 workflow alphagenome {
 
     take :
@@ -535,13 +535,22 @@ workflow alphagenome {
         // prep above and publish to separate dirs.
         local_scores_ch = Channel.empty()
         if (params.run_alphagenome) {
-            ALPHAGENOME(
-                BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
-                scoring_vcf_ch,
-                hg38_fai_index,
-                file("${params.bin}/run_alphagenome.py")
-            )
-            local_scores_ch = ALPHAGENOME.out.alphagenome_ch
+            // one (chunk_index, n_chunks) per params.alphagenome_chunk_size
+            // candidates, each paired with the (single) input files
+            chunk_ch = BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch
+                .flatMap { vcf ->
+                    def n = 0
+                    vcf.eachLine { line -> if (!line.startsWith('#')) n++ }
+                    def k = Math.max(1, (int) Math.ceil(n / (params.alphagenome_chunk_size as double)))
+                    (0..<k).collect { i -> tuple(i, k) }
+                }
+                .combine( BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch )
+                .combine( scoring_vcf_ch )
+                .combine( hg38_fai_index )
+
+            ALPHAGENOME( chunk_ch, file("${params.bin}/run_alphagenome.py") )
+            MERGE_ALPHAGENOME_CHUNKS( ALPHAGENOME.out.alphagenome_chunk_ch.collect() )
+            local_scores_ch = MERGE_ALPHAGENOME_CHUNKS.out.alphagenome_ch
         }
 
         api_scores_ch = Channel.empty()

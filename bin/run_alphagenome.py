@@ -194,10 +194,14 @@ def build_organism_settings(dna_model, dna_client, reference, resources_dir):
     own hg38 reference; the annotation/calibration files come from
     resources_dir when given. Any file missing from resources_dir keeps its
     remote default, so a partial download degrades to network access rather
-    than silently disabling the scorers that depend on it."""
+    than silently disabling the scorers that depend on it.
+
+    Human only: create() opens a FASTA for every organism it's given, so
+    keeping the default mouse entry would still stream GRCm38 from GCS at
+    startup for nothing."""
     import dataclasses
     human = dna_client.Organism.HOMO_SAPIENS
-    settings = dict(dna_model.default_organism_settings())
+    defaults = dna_model.default_organism_settings()
     overrides = {"fasta_path": reference}
     if resources_dir:
         for field, fname in RESOURCE_FILES.items():
@@ -206,8 +210,7 @@ def build_organism_settings(dna_model, dna_client, reference, resources_dir):
                 overrides[field] = path
             else:
                 sys.stderr.write(f"[run_alphagenome] WARNING: {path} not found -- {field} falls back to remote default\n")
-    settings[human] = dataclasses.replace(settings[human], **overrides)
-    return settings
+    return {human: dataclasses.replace(defaults[human], **overrides)}
 
 
 def load_model(weights_dir, reference, resources_dir):
@@ -422,8 +425,14 @@ def main():
     p.add_argument("-quantile_threshold", type=float, default=0.99,
                    help="|quantile_score| at/above which a gene counts as impacted (impacted_genes) and "
                         "large_impact_motor_neuron is flagged")
+    p.add_argument("-chunk_index", type=int, default=0,
+                   help="Score only this chunk (0-based) of the candidates, sorted by VID -- "
+                        "for splitting one run across several GPU jobs (see modules/alphagenome/main.nf)")
+    p.add_argument("-n_chunks", type=int, default=1, help="Total number of chunks (default 1 = everything)")
     p.add_argument("-output", required=True, help="Output TSV path")
     args = p.parse_args()
+    if not 0 <= args.chunk_index < args.n_chunks:
+        p.error(f"-chunk_index must be in [0, {args.n_chunks})")
 
     # alphagenome's own tidy_scores() pd.concat trips this on every call
     # with newer pandas -- harmless, and it floods the log
@@ -460,6 +469,16 @@ def main():
     for vid, chrom, pos, ref, alt, *_, flipped in parse_vcf(args.vcf):
         lifted_by_vid[vid] = (chrom, pos, ref, alt, flipped)
 
+    # This task's contiguous slice of the VID-sorted candidates. Every
+    # candidate lands in exactly one chunk, so the merged chunk outputs still
+    # give every candidate exactly one row.
+    all_vids = sorted(candidates_by_vid)
+    chunk_size = -(-len(all_vids) // args.n_chunks)  # ceil
+    chunk_vids = all_vids[args.chunk_index * chunk_size:(args.chunk_index + 1) * chunk_size]
+    if args.n_chunks > 1:
+        sys.stderr.write(f"[run_alphagenome] chunk {args.chunk_index + 1}/{args.n_chunks}: "
+                         f"{len(chunk_vids)} of {len(all_vids)} candidates\n")
+
     columns = [
         "VID", "ORIG_CHROM", "ORIG_POS", "ORIG_REF", "ORIG_ALT",
         "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT",
@@ -484,7 +503,7 @@ def main():
     n_scoring_failed = 0
     with open(args.output, "w") as out:
         out.write("\t".join(columns) + "\n")
-        for vid in sorted(candidates_by_vid):
+        for vid in chunk_vids:
             meta = candidates_by_vid[vid]
             row = {
                 "VID": vid, "ORIG_CHROM": meta["chrom"], "ORIG_POS": meta["pos"],
@@ -532,13 +551,13 @@ def main():
             })
             n_scored += 1
             if n_scored % 500 == 0:
-                sys.stderr.write(f"[run_alphagenome] progress: {n_scored} scored / {len(candidates_by_vid)} candidates\n")
+                sys.stderr.write(f"[run_alphagenome] progress: {n_scored} scored / {len(chunk_vids)} candidates\n")
 
     for scorer, n in sorted(partial_counts.items()):
         sys.stderr.write(f"[run_alphagenome] {scorer} failed for {n} variant(s) scored with the remaining scorers "
                          f"(reason in each row's note column)\n")
     sys.stderr.write(
-        f"[run_alphagenome] {len(candidates_by_vid)} total candidate(s): {n_scored} scored "
+        f"[run_alphagenome] {len(chunk_vids)} total candidate(s): {n_scored} scored "
         f"({n_flipped} allele-flipped), "
         f"{n_liftover_failed} failed liftover, {n_scoring_failed} failed scoring -> {args.output}\n"
     )
