@@ -23,6 +23,7 @@ genomes/
 singularity/*
 containers/
 snpeff_data/
+alphamissense_data/
 # Singularity images and temporary downloads
 **/singularity/
 *.img
