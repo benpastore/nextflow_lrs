@@ -27,6 +27,26 @@ models), joining everything the pipeline knows about it:
 Optional inputs that are absent (or the pipeline's NO_FILE placeholder)
 just leave their columns empty.
 
+Also writes a sibling-pair gene summary (-sibpair_output), for deciding
+which genes to focus on: one row per (mild child, severe sibling, gene)
+over the model-passing variants only (a variant passing for a mild child
+is, by the models' definition, absent from that child's severe siblings).
+Per row: the gene's passing variants and model(s); AlphaGenome's
+prediction about THAT gene (ag_gene_*, from run_alphagenome.py's per-gene
+table), the other genes those variants are predicted to affect
+(ag_other_impacted_genes), and the variants' strongest prediction overall
+(variant_ag_*, any gene or local chromatin); the strongest AlphaMissense
+pathogenicity (and which variant), the rarest gnomAD AF_nfe / 1000 Genomes
+EUR AF, the worst
+snpEff impact, and -- when repeat_compare / cnv_compare ran -- whether the
+same pair also differs at a repeat locus in that gene (repeat_flag) and
+both children's copy number of the gene (mild_cn / severe_cn, 2 = no CNV
+call; cnv_flag when they differ). n_mild_with_gene = how many mild children
+have model-passing variants in the gene, cohort-wide. Genes the passing
+variants are predicted to affect (>= -alphagenome_threshold) that aren't
+themselves modifier genes get their own rows (row_source =
+alphagenome_target), so no affected gene is dropped.
+
 Also writes a variant funnel (-funnel_output): how many variants enter
 and leave each step (modifier search -> AlphaGenome input -> liftover ->
 AlphaGenome / AlphaMissense -> report), counted from each step's actual output files rather
@@ -40,7 +60,7 @@ import sys
 from collections import defaultdict
 
 from _modifier_common import (
-    CALLER_PRIORITY, classify_gt, get_ann, get_info_field, load_vcf_manifest, logger, opener,
+    CALLER_PRIORITY, classify_gt, get_ann, get_info_field, load_family_groups, load_vcf_manifest, logger, opener,
 )
 
 IMPACT_RANK = {"HIGH": 3, "MODERATE": 2, "LOW": 1, "MODIFIER": 0}
@@ -344,6 +364,250 @@ def build_funnel(variants, n_rows, candidate_ids, lifted, unmap_reasons, ag_tabl
     return rows
 
 
+def read_modifier_gene_rows(paths):
+    """[(variant key, gene, model, [mild samples])], one per modifier TSV row."""
+    out = []
+    for model, path in paths:
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f, delimiter="\t"):
+                key = (row["#CHROM"], row["POS"], row["REF"], row["ALT"])
+                samples = [s for s in (row.get("samples") or "").split(",") if s]
+                if row.get("gene"):
+                    out.append((key, row["gene"], model, samples))
+    return out
+
+
+def read_pair_flags(path, gene_cols):
+    """{(mild, severe, gene): [row]} from repeat_compare's / cnv_compare's
+    mild_vs_severe TSV. gene_cols: the gene column, and optionally an
+    all_genes column ('G1:feature;G2:feature') so a repeat touching several
+    genes is attached to each."""
+    flags = defaultdict(list)
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            genes = {}  # gene -> the locus's feature relative to THAT gene
+            for col in gene_cols:
+                for g in (row.get(col) or "").split(";"):
+                    name, _, feat = g.partition(":")
+                    if name:
+                        genes.setdefault(name, feat or row.get("feature", ""))
+            for g, feat in genes.items():
+                flags[(row["MILD_SAMPLE"], row["SEVERE_SAMPLE"], g)].append(dict(row, feature=feat))
+    return flags
+
+
+def read_gene_cn(path):
+    """{gene: {sample: CN}} from cnv_compare.py's cohort.cnv_gene_cn.tsv
+    (columns GENE, CHROM, GENE_START, GENE_END, <sample>:<phenotype>...;
+    only genes with CN != 2 in someone). A symbol on several loci keeps,
+    per sample, the CN furthest from 2."""
+    cn = defaultdict(dict)
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        sample_cols = [(c, c.rsplit(":", 1)[0]) for c in reader.fieldnames if ":" in c]
+        for row in reader:
+            for col, sample in sample_cols:
+                try:
+                    v = int(row[col])
+                except (TypeError, ValueError):
+                    continue
+                cur = cn[row["GENE"]].get(sample)
+                if cur is None or abs(v - 2) > abs(cur - 2):
+                    cn[row["GENE"]][sample] = v
+    return cn
+
+
+def _float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def read_alphagenome_genes(paths):
+    """{VID: [per-gene row]} from run_alphagenome.py -gene_output TSVs; the
+    first table (local) wins per VID, later ones (API) fill VIDs it lacks --
+    same precedence as the per-variant columns."""
+    by_vid = {}
+    for path in paths:
+        this = defaultdict(list)
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f, delimiter="\t"):
+                this[row["VID"]].append(row)
+        for vid, rows in this.items():
+            by_vid.setdefault(vid, rows)
+    return by_vid
+
+
+def write_sibpair_gene_summary(path, gene_rows, family_json, report_rows, repeat_flags, gene_cn,
+                               ag_genes=None, ag_threshold=0.99):
+    """gene_cn: read_gene_cn() output, or None when cnv_compare didn't run
+    (CN columns then left empty rather than claiming CN 2).
+    ag_genes: read_alphagenome_genes() output, or None when AlphaGenome's
+    per-gene table isn't available (gene-specific AG columns left empty).
+
+    Rows come from two sources (row_source):
+      modifier_gene       a gene the recessive/dominant model passed the
+                          variant(s) in (snpEff annotation)
+      alphagenome_target  a gene those same passing variants are predicted
+                          to affect (|quantile| >= ag_threshold, per-gene
+                          table) that isn't already a modifier gene for the
+                          pair -- e.g. a neighbouring gene's expression
+    """
+    discordant, _ = load_family_groups(family_json)
+    severe_sibs = {mild: sevs for mild, sevs in discordant}
+    ag_genes = ag_genes if ag_genes is not None else {}
+    have_ag_genes = bool(ag_genes)
+
+    def new_bucket():
+        return {"variants": set(), "models": set(), "source": "modifier_gene"}
+
+    buckets = defaultdict(new_bucket)
+    mild_with_gene = defaultdict(set)
+    variant_models = defaultdict(set)
+    for key, gene, model, samples in gene_rows:
+        variant_models[key].add(model)
+        for mild in samples:
+            mild_with_gene[gene].add(mild)
+            for sev in severe_sibs.get(mild, []):
+                b = buckets[(mild, sev, gene)]
+                b["variants"].add(key)
+                b["models"].add(model)
+
+    # genes the pair's passing variants are predicted to affect, beyond the
+    # modifier genes themselves
+    pair_variants = defaultdict(set)
+    for (mild, sev, _gene), b in list(buckets.items()):
+        pair_variants[(mild, sev)].update(b["variants"])
+    for (mild, sev), keys in pair_variants.items():
+        for key in keys:
+            vid = report_rows[key]["VID"] if key in report_rows else None
+            for g in ag_genes.get(vid, []):
+                q = _float(g.get("gene_max_abs"))
+                gene = g.get("ALPHAGENOME_GENE", "")
+                if not gene or q is None or q < ag_threshold:
+                    continue
+                if (mild, sev, gene) in buckets and buckets[(mild, sev, gene)]["source"] == "modifier_gene":
+                    continue
+                b = buckets[(mild, sev, gene)]
+                b["source"] = "alphagenome_target"
+                b["variants"].add(key)
+                b["models"].update(variant_models[key])
+
+    cols = ["MILD_SAMPLE", "SEVERE_SAMPLE", "GENE", "row_source", "n_mild_with_gene", "models", "n_variants",
+            # AlphaGenome prediction about THIS gene (per-gene table)
+            "ag_gene_scored", "ag_gene_max_abs", "ag_gene_max_signed", "ag_gene_max_tissue", "ag_gene_max_scorer",
+            "ag_gene_max_variant",
+            # other genes these variants are predicted to affect (>= threshold)
+            "ag_other_impacted_genes",
+            # strongest AlphaGenome prediction of the variants overall (any gene, or local chromatin)
+            "variant_ag_max_abs", "variant_ag_max_signed", "variant_ag_max_tissue", "variant_ag_max_scorer",
+            "variant_ag_max_variant",
+            "max_alphamissense_pathogenicity", "max_alphamissense_class", "max_alphamissense_protein_variant",
+            "max_alphamissense_variant",
+            "min_gnomad_AF_NFE", "min_kg_AF_EUR", "n_variants_no_AF", "worst_snpeff_impact",
+            "repeat_flag", "n_repeat_loci", "repeat_detail", "mild_cn", "severe_cn", "cnv_flag", "variants"]
+    rows = []
+    for (mild, sev, gene), b in buckets.items():
+        vrows = [report_rows[k] for k in sorted(b["variants"]) if k in report_rows]
+
+        # this gene's own AlphaGenome predictions, and other impacted genes
+        own, others = None, {}
+        for r in vrows:
+            for g in ag_genes.get(r["VID"], []):
+                q = _float(g.get("gene_max_abs"))
+                if q is None:
+                    continue
+                if g.get("ALPHAGENOME_GENE") == gene:
+                    if own is None or q > own[0]:
+                        own = (q, g, r["VID"])
+                elif q >= ag_threshold:
+                    name = g["ALPHAGENOME_GENE"]
+                    if name not in others or q > others[name][0]:
+                        others[name] = (q, g)
+        other_str = ";".join(f"{n}={_float(g['gene_max_signed']):.3f}({g['gene_max_tissue']}.{g['gene_max_scorer']})"
+                             for n, (q, g) in sorted(others.items(), key=lambda kv: -kv[1][0]))
+        scored_any = any(r["VID"] in ag_genes for r in vrows)
+
+        best_ag = max((r for r in vrows if _float(r.get("alphagenome_max_impact")) is not None),
+                      key=lambda r: _float(r["alphagenome_max_impact"]), default=None)
+        best_am = max((r for r in vrows if _float(r.get("alphamissense_pathogenicity")) is not None),
+                      key=lambda r: _float(r["alphamissense_pathogenicity"]), default=None)
+        gn = [x for x in (_float(r.get("gnomad_AF_NFE")) for r in vrows) if x is not None]
+        kg = [x for x in (_float(r.get("kg_AF_EUR")) for r in vrows) if x is not None]
+        n_no_af = sum(1 for r in vrows if _float(r.get("gnomad_AF_NFE")) is None and _float(r.get("kg_AF_EUR")) is None)
+        impacts = [r.get("snpeff_impact", "") for r in vrows if r.get("snpeff_impact")]
+        worst = max(impacts, key=lambda i: IMPACT_RANK.get(i, -1)) if impacts else ""
+
+        rep = repeat_flags.get((mild, sev, gene), [])
+        rep_dirs = sorted({r["DIRECTION"] for r in rep})
+        rep_detail = ";".join(f"{r['LOCUS_ID']}({r.get('feature', '')},{r['DIRECTION']},"
+                              f"{_float(r['DELTA_COPIES']):+.1f}copies)" for r in rep)
+        mild_cn = severe_cn = cnv_flag = ""
+        if gene_cn is not None:
+            # absent from the matrix = no CNV call overlapping the gene = CN 2
+            mild_cn = gene_cn.get(gene, {}).get(mild, 2)
+            severe_cn = gene_cn.get(gene, {}).get(sev, 2)
+            cnv_flag = ("mild_higher" if mild_cn > severe_cn else
+                        "mild_lower" if mild_cn < severe_cn else "")
+
+        rows.append({
+            "MILD_SAMPLE": mild, "SEVERE_SAMPLE": sev, "GENE": gene, "row_source": b["source"],
+            "n_mild_with_gene": len(mild_with_gene[gene]),
+            "models": ",".join(sorted(b["models"])), "n_variants": len(b["variants"]),
+            # yes = AlphaGenome scored this gene; no = variants were scored but
+            # this gene wasn't among their genes (outside the window, or a
+            # gene-symbol mismatch CHM13 RefSeq vs hg38 GENCODE); "" = no table
+            "ag_gene_scored": ("yes" if own else "no" if scored_any else "") if have_ag_genes else "",
+            "ag_gene_max_abs": f"{own[0]:.4f}" if own else "",
+            "ag_gene_max_signed": own[1].get("gene_max_signed", "") if own else "",
+            "ag_gene_max_tissue": own[1].get("gene_max_tissue", "") if own else "",
+            "ag_gene_max_scorer": own[1].get("gene_max_scorer", "") if own else "",
+            "ag_gene_max_variant": own[2] if own else "",
+            "ag_other_impacted_genes": other_str,
+            "variant_ag_max_abs": best_ag["alphagenome_max_impact"] if best_ag else "",
+            "variant_ag_max_signed": best_ag.get("alphagenome_max_impact_signed", "") if best_ag else "",
+            "variant_ag_max_tissue": best_ag.get("alphagenome_max_impact_tissue", "") if best_ag else "",
+            "variant_ag_max_scorer": best_ag.get("alphagenome_max_impact_scorer", "") if best_ag else "",
+            "variant_ag_max_variant": best_ag["VID"] if best_ag else "",
+            "max_alphamissense_pathogenicity": best_am["alphamissense_pathogenicity"] if best_am else "",
+            "max_alphamissense_class": best_am.get("alphamissense_class", "") if best_am else "",
+            "max_alphamissense_protein_variant": best_am.get("alphamissense_protein_variant", "") if best_am else "",
+            "max_alphamissense_variant": best_am["VID"] if best_am else "",
+            "min_gnomad_AF_NFE": f"{min(gn):.6g}" if gn else "",
+            "min_kg_AF_EUR": f"{min(kg):.6g}" if kg else "",
+            "n_variants_no_AF": n_no_af,
+            "worst_snpeff_impact": worst,
+            "repeat_flag": ",".join(rep_dirs), "n_repeat_loci": len(rep), "repeat_detail": rep_detail,
+            "mild_cn": mild_cn, "severe_cn": severe_cn, "cnv_flag": cnv_flag,
+            "variants": ",".join(r["VID"] for r in vrows),
+        })
+
+    def sort_key(r):
+        def neg(v):
+            v = _float(v)
+            return -(v if v is not None else -1)
+        # gene-specific AlphaGenome first, then variant-level, then AlphaMissense
+        return (r["MILD_SAMPLE"], r["SEVERE_SAMPLE"], neg(r["ag_gene_max_abs"]), neg(r["variant_ag_max_abs"]),
+                neg(r["max_alphamissense_pathogenicity"]), r["GENE"])
+
+    rows.sort(key=sort_key)
+    with open(path, "w", newline="") as out:
+        writer = csv.DictWriter(out, fieldnames=cols, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+    n_rep = sum(1 for r in rows if r["repeat_flag"])
+    n_cnv = sum(1 for r in rows if r["cnv_flag"])
+    n_target = sum(1 for r in rows if r["row_source"] == "alphagenome_target")
+    n_unscored = sum(1 for r in rows if r["ag_gene_scored"] == "no" and r["row_source"] == "modifier_gene")
+    logger.info(f"Sibling-pair gene summary: {len(rows)} (mild, severe, gene) row(s) over {len(severe_sibs)} mild "
+                f"child(ren); {n_target} AlphaGenome-target gene row(s); {n_rep} with a repeat difference, "
+                f"{n_cnv} with a CNV difference -> {path}")
+    if n_unscored:
+        logger.info(f"  {n_unscored} modifier-gene row(s) whose gene AlphaGenome didn't score (ag_gene_scored=no: "
+                    f"outside the window, or a CHM13-RefSeq vs hg38-GENCODE symbol mismatch)")
+
+
 def read_alphagenome(path):
     """(VID -> row, result columns) from a run_alphagenome.py TSV."""
     with open(path, newline="") as f:
@@ -364,8 +628,16 @@ def main():
     p.add_argument("-alphagenome_api_tsv", default="", help="run_alphagenome.py output, API backend")
     p.add_argument("-candidate_vcf", default="", help="AlphaGenome input VCF (build_alphagenome_input.py), for the funnel")
     p.add_argument("-unmap", default="", help="Liftover .unmap file, for the funnel")
+    p.add_argument("-repeat_pairs_tsv", default="", help="repeat_compare.py's cohort.repeat_mild_vs_severe.tsv (optional)")
+    p.add_argument("-cnv_gene_cn_tsv", default="", help="cnv_compare.py's cohort.cnv_gene_cn.tsv (optional)")
+    p.add_argument("-alphagenome_gene_tsv", default="", help="run_alphagenome.py -gene_output, local backend (optional)")
+    p.add_argument("-alphagenome_api_gene_tsv", default="", help="run_alphagenome.py -gene_output, API backend (optional)")
+    p.add_argument("-alphagenome_threshold", type=float, default=0.99,
+                   help="|quantile| at/above which another gene counts as impacted in the sibling-pair summary "
+                        "(same as params.alphagenome_quantile_threshold)")
     p.add_argument("-output", required=True)
     p.add_argument("-funnel_output", required=True, help="Per-step variant counts TSV")
+    p.add_argument("-sibpair_output", default="", help="Per (mild, severe sibling, gene) summary TSV")
     args = p.parse_args()
 
     variants, n_rows = read_modifier_tsvs([("recessive", args.recessive_tsv), ("dominant", args.dominant_tsv)])
@@ -405,6 +677,7 @@ def main():
     def sort_key(key):
         return (key[0], int(key[1]) if key[1].isdigit() else 0, key[2], key[3])
 
+    report_rows = {}
     with open(args.output, "w", newline="") as out:
         writer = csv.DictWriter(out, fieldnames=columns, delimiter="\t", extrasaction="ignore")
         writer.writeheader()
@@ -461,8 +734,20 @@ def main():
                 row["alphagenome_status"] = "not_submitted"
 
             writer.writerow(row)
+            report_rows[key] = row
 
     logger.info(f"Wrote {len(variants)} variant(s) -> {args.output}")
+
+    if args.sibpair_output:
+        modifier_paths = [("recessive", args.recessive_tsv), ("dominant", args.dominant_tsv)]
+        write_sibpair_gene_summary(
+            args.sibpair_output, read_modifier_gene_rows(modifier_paths), args.family_json, report_rows,
+            read_pair_flags(args.repeat_pairs_tsv, ("gene", "all_genes")) if present(args.repeat_pairs_tsv) else {},
+            read_gene_cn(args.cnv_gene_cn_tsv) if present(args.cnv_gene_cn_tsv) else None,
+            read_alphagenome_genes([p for p in (args.alphagenome_gene_tsv, args.alphagenome_api_gene_tsv)
+                                    if present(p)]),
+            args.alphagenome_threshold,
+        )
 
     funnel = build_funnel(
         variants, n_rows,

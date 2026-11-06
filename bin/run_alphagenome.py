@@ -398,7 +398,35 @@ def summarize_scores(scores, ontology_resolved, variant_scorers_lib, flipped=Fal
             result["best_track"] = f"{track}|{gene}" if gene else track
 
     result["impacted_genes"], result["n_impacted_genes"] = impacted_genes(df, ontology_resolved, candidate_genes, threshold)
+    result["gene_scores"] = per_gene_scores(df, ontology_resolved)
     return result
+
+
+def gene_score_columns():
+    """Per-gene table columns, one per tissue x gene-level scorer."""
+    return [f"{tissue}_{scorer}" for tissue in ONTOLOGY_TARGETS for scorer in VARIANT_SCORER_KEYS
+            if scorer in GENE_SCORERS]
+
+
+def per_gene_scores(df, ontology_resolved):
+    """{gene: {(tissue, scorer): signed quantile}} for EVERY gene in the
+    window with a gene-level score (no threshold) -- the strongest track per
+    tissue x scorer. Unlike the per-tissue columns (max over all genes),
+    this keeps which gene each prediction is about."""
+    out = {}
+    for tissue, curie in ontology_resolved.items():
+        if not curie:
+            continue
+        sub = df[(df["ontology_curie"] == curie) & df["scorer"].isin(GENE_SCORERS)]
+        if sub.empty:
+            continue
+        sub = sub.assign(_gene=sub.apply(gene_label, axis=1), _abs=sub["quantile_score"].abs())
+        sub = sub[sub["_gene"] != ""]
+        if sub.empty:
+            continue
+        for (gene, scorer), i in sub.groupby(["_gene", "scorer"])["_abs"].idxmax().items():
+            out.setdefault(gene, {})[(tissue, scorer)] = float(sub.at[i, "quantile_score"])
+    return out
 
 
 def main():
@@ -430,6 +458,9 @@ def main():
                         "for splitting one run across several GPU jobs (see modules/alphagenome/main.nf)")
     p.add_argument("-n_chunks", type=int, default=1, help="Total number of chunks (default 1 = everything)")
     p.add_argument("-output", required=True, help="Output TSV path")
+    p.add_argument("-gene_output", default="",
+                   help="Optional per-gene TSV: one row per scored variant x gene in the window, every gene "
+                        "(no threshold), with its own tissue x scorer quantiles and strongest prediction")
     args = p.parse_args()
     if not 0 <= args.chunk_index < args.n_chunks:
         p.error(f"-chunk_index must be in [0, {args.n_chunks})")
@@ -496,6 +527,29 @@ def main():
     def write_row(out, row):
         out.write("\t".join(fmt(row.get(c)) for c in columns) + "\n")
 
+    gene_cols = gene_score_columns()
+    gene_columns = ["VID", "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT", "ALPHAGENOME_GENE", "candidate_gene",
+                    "gene_max_abs", "gene_max_signed", "gene_max_tissue", "gene_max_scorer", *gene_cols]
+    gene_out = None
+    if args.gene_output:
+        gene_out = open(args.gene_output, "w")
+        gene_out.write("\t".join(gene_columns) + "\n")
+
+    def write_gene_rows(row, gene_scores, candidate_genes):
+        """One row per gene, strongest first."""
+        if gene_out is None:
+            return
+        ranked = []
+        for gene, scores in gene_scores.items():
+            (tissue, scorer), q = max(scores.items(), key=lambda kv: abs(kv[1]))
+            ranked.append((abs(q), gene, q, tissue, scorer, scores))
+        for _, gene, q, tissue, scorer, scores in sorted(ranked, key=lambda x: (-x[0], x[1])):
+            vals = {"ALPHAGENOME_GENE": gene, "candidate_gene": "yes" if gene in candidate_genes else "no",
+                    "gene_max_abs": abs(q), "gene_max_signed": q,
+                    "gene_max_tissue": tissue, "gene_max_scorer": scorer}
+            vals.update({f"{t}_{s}": v for (t, s), v in scores.items()})
+            gene_out.write("\t".join(fmt({**row, **vals}.get(c)) for c in gene_columns) + "\n")
+
     n_scored = 0
     n_flipped = 0
     partial_counts = Counter()
@@ -520,11 +574,12 @@ def main():
             chrom, pos, ref, alt, flipped = lifted_by_vid[vid]
             row.update({"HG38_CHROM": chrom, "HG38_POS": pos, "HG38_REF": ref, "HG38_ALT": alt,
                         "allele_flipped": flipped})
+            candidate_genes = set(filter(None, meta["gene"].split(",")))
             try:
                 scores, failed_scorers = score_variant(model, genome_mod, dna_client, variant_scorers, chrom_sizes,
                                                        chrom, pos, ref, alt, args.window)
                 summary = summarize_scores(scores, ontology_resolved, variant_scorers_lib, flipped=flipped,
-                                           candidate_genes=set(filter(None, meta["gene"].split(","))),
+                                           candidate_genes=candidate_genes,
                                            threshold=args.quantile_threshold)
             except Exception as e:
                 sys.stderr.write(f"[run_alphagenome] WARNING: scoring failed for {vid} ({chrom}:{pos}:{ref}>{alt}): {e}\n")
@@ -549,10 +604,13 @@ def main():
                 **row, **summary, "status": "scored", "note": note,
                 "large_impact_motor_neuron": mn_max is not None and mn_max >= args.quantile_threshold,
             })
+            write_gene_rows(row, summary.get("gene_scores", {}), candidate_genes)
             n_scored += 1
             if n_scored % 500 == 0:
                 sys.stderr.write(f"[run_alphagenome] progress: {n_scored} scored / {len(chunk_vids)} candidates\n")
 
+    if gene_out is not None:
+        gene_out.close()
     for scorer, n in sorted(partial_counts.items()):
         sys.stderr.write(f"[run_alphagenome] {scorer} failed for {n} variant(s) scored with the remaining scorers "
                          f"(reason in each row's note column)\n")

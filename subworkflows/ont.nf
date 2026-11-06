@@ -367,6 +367,7 @@ workflow cnv_compare {
     emit :
         cnv_gene_summary_ch = CNV_COMPARE.out.gene_summary_ch
         cnv_pairs_ch = CNV_COMPARE.out.pairs_ch
+        cnv_gene_cn_ch = CNV_COMPARE.out.gene_cn_ch
 }
 
 workflow repeat_compare {
@@ -394,6 +395,7 @@ workflow repeat_compare {
         repeat_locus_summary_ch = REPEAT_COMPARE.out.locus_summary_ch
         repeat_gene_summary_ch = REPEAT_COMPARE.out.gene_summary_ch
         repeat_pattern_summary_ch = REPEAT_COMPARE.out.pattern_summary_ch
+        repeat_pairs_ch = REPEAT_COMPARE.out.pairs_ch
 }
 
 include { PARAPHASE } from '../modules/paraphase/main.nf'
@@ -617,6 +619,7 @@ workflow alphagenome {
         // only AlphaMissense needs hg38 coordinates); they share the input
         // prep above and publish to separate dirs.
         local_scores_ch = Channel.empty()
+        local_gene_scores_ch = Channel.empty()
         if (params.run_alphagenome) {
             // one (chunk_index, n_chunks) per params.alphagenome_chunk_size
             // candidates, each paired with the (single) input files
@@ -632,11 +635,15 @@ workflow alphagenome {
                 .combine( hg38_fai_index )
 
             ALPHAGENOME( chunk_ch, file("${params.bin}/run_alphagenome.py") )
-            MERGE_ALPHAGENOME_CHUNKS( ALPHAGENOME.out.alphagenome_chunk_ch.collect() )
+            MERGE_ALPHAGENOME_CHUNKS(
+                ALPHAGENOME.out.alphagenome_chunk_ch.mix( ALPHAGENOME.out.alphagenome_gene_chunk_ch ).collect()
+            )
             local_scores_ch = MERGE_ALPHAGENOME_CHUNKS.out.alphagenome_ch
+            local_gene_scores_ch = MERGE_ALPHAGENOME_CHUNKS.out.alphagenome_gene_ch
         }
 
         api_scores_ch = Channel.empty()
+        api_gene_scores_ch = Channel.empty()
         if (params.run_alphagenome_api) {
             ALPHAGENOME_API(
                 BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
@@ -645,11 +652,14 @@ workflow alphagenome {
                 file("${params.bin}/run_alphagenome.py")
             )
             api_scores_ch = ALPHAGENOME_API.out.alphagenome_api_ch
+            api_gene_scores_ch = ALPHAGENOME_API.out.alphagenome_api_gene_ch
         }
 
     emit :
         alphagenome_ch = local_scores_ch
         alphagenome_api_ch = api_scores_ch
+        alphagenome_gene_ch = local_gene_scores_ch       // per variant x gene (every gene in the window)
+        alphagenome_api_gene_ch = api_gene_scores_ch
         alphagenome_unmapped_ch = unmapped_ch
         hg38_vcf_ch = scoring_vcf_ch       // candidates in hg38 coords (also used for AlphaMissense lookup)
         candidate_vcf_ch = BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch   // post-SV/AF-filter input, for the variant funnel
@@ -736,12 +746,17 @@ workflow variant_report {
         alphagenome_tsv          // local-backend AlphaGenome scores, or file("NO_FILE")
         alphagenome_api_tsv      // API-backend AlphaGenome scores, or file("NO_FILE")
         alphamissense_tsv        // run_alphamissense.py results, or file("NO_FILE")
+        repeat_pairs_tsv         // repeat_compare's cohort.repeat_mild_vs_severe.tsv, or file("NO_FILE")
+        cnv_gene_cn_tsv          // cnv_compare's cohort.cnv_gene_cn.tsv, or file("NO_FILE")
+        alphagenome_gene_tsv     // per variant x gene AlphaGenome scores (local), or file("NO_FILE")
+        alphagenome_api_gene_tsv // same, API backend, or file("NO_FILE")
 
     main :
         VARIANT_REPORT(
             recessive_modifier_tsv, dominant_modifier_tsv, family_json,
             vcf_manifest, vcfs,
             candidate_vcf, hg38_vcf, unmap, alphagenome_tsv, alphagenome_api_tsv, alphamissense_tsv,
+            repeat_pairs_tsv, cnv_gene_cn_tsv, alphagenome_gene_tsv, alphagenome_api_gene_tsv,
             file("${params.bin}/_modifier_common.py"),
             file("${params.bin}/build_variant_report.py")
         )
@@ -749,4 +764,5 @@ workflow variant_report {
     emit :
         variant_report_ch = VARIANT_REPORT.out.variant_report_ch
         variant_funnel_ch = VARIANT_REPORT.out.variant_funnel_ch
+        sibpair_gene_summary_ch = VARIANT_REPORT.out.sibpair_gene_summary_ch
 }

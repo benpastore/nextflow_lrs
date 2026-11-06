@@ -531,11 +531,16 @@ workflow {
         // as the modifier search). Genes come from params.cnv_repeat_gtf
         // (default params.snpeff_gtf). See bin/cnv_compare.py and
         // bin/repeat_compare.py; results in <results>/10_cnv_repeat_compare.
+        // per-pair outputs also feed the final report's sibling-pair gene
+        // summary (variant_report below); NO_FILE when the step is off
+        repeat_pairs_ch = Channel.value(file("NO_FILE"))
+        cnv_gene_cn_ch = Channel.value(file("NO_FILE"))
         if (params.family_json && (params.run_cnv_compare || params.run_repeat_compare)) {
             def cmp_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
             if (params.run_cnv_compare) {
                 if (!cmp_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_cnv_compare' }
                 cnv_compare( file(params.family_json), spectre.out.spectre_vcf_ch, file(cmp_gtf_path, checkIfExists: true) )
+                cnv_gene_cn_ch = cnv_compare.out.cnv_gene_cn_ch
             }
             if (params.run_repeat_compare) {
                 repeat_compare(
@@ -544,6 +549,7 @@ workflow {
                     cmp_gtf_path ? file(cmp_gtf_path, checkIfExists: true) : file("NO_FILE"),
                     params.repeat_known_loci_bed ? file(params.repeat_known_loci_bed, checkIfExists: true) : file("NO_FILE")
                 )
+                repeat_pairs_ch = repeat_compare.out.repeat_pairs_ch
             }
         }
 
@@ -642,6 +648,8 @@ workflow {
                 unmap_ch = Channel.empty()
                 alphagenome_ch = Channel.empty()
                 alphagenome_api_ch = Channel.empty()
+                alphagenome_gene_ch = Channel.empty()
+                alphagenome_api_gene_ch = Channel.empty()
                 alphamissense_ch = Channel.empty()
                 if (params.run_alphagenome || params.run_alphagenome_api || params.alphamissense_tsv) {
                     if (!(params.genome_version in ['T2T', 'HG38'])) {
@@ -675,6 +683,8 @@ workflow {
                     unmap_ch = alphagenome.out.alphagenome_unmapped_ch
                     alphagenome_ch = alphagenome.out.alphagenome_ch
                     alphagenome_api_ch = alphagenome.out.alphagenome_api_ch
+                    alphagenome_gene_ch = alphagenome.out.alphagenome_gene_ch
+                    alphagenome_api_gene_ch = alphagenome.out.alphagenome_api_gene_ch
                 }
 
                 ////////////////// ALPHAMISSENSE MISSENSE PATHOGENICITY /////////////////////
@@ -707,7 +717,11 @@ workflow {
                     unmap_ch.ifEmpty(file("NO_FILE")),
                     alphagenome_ch.ifEmpty(file("NO_FILE")),
                     alphagenome_api_ch.ifEmpty(file("NO_FILE")),
-                    alphamissense_ch.ifEmpty(file("NO_FILE"))
+                    alphamissense_ch.ifEmpty(file("NO_FILE")),
+                    repeat_pairs_ch,
+                    cnv_gene_cn_ch,
+                    alphagenome_gene_ch.ifEmpty(file("NO_FILE")),
+                    alphagenome_api_gene_ch.ifEmpty(file("NO_FILE"))
                 )
             }
         }

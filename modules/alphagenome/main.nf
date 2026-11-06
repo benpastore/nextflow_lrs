@@ -159,6 +159,7 @@ process ALPHAGENOME {
 
     output:
         path("cohort.alphagenome.chunk_*.tsv"), emit: alphagenome_chunk_ch
+        path("cohort.alphagenome.genes.chunk_*.tsv"), emit: alphagenome_gene_chunk_ch
 
     script:
     """
@@ -178,7 +179,8 @@ process ALPHAGENOME {
         -chunk_index ${chunk_index} \\
         -n_chunks ${n_chunks} \\
         ${params.alphagenome_args ?: ''} \\
-        -output cohort.alphagenome.chunk_${String.format('%05d', chunk_index)}.tsv
+        -output cohort.alphagenome.chunk_${String.format('%05d', chunk_index)}.tsv \\
+        -gene_output cohort.alphagenome.genes.chunk_${String.format('%05d', chunk_index)}.tsv
     """
 }
 
@@ -186,7 +188,8 @@ process MERGE_ALPHAGENOME_CHUNKS {
 
     // Chunks are contiguous slices of the VID-sorted candidates and their
     // filenames are zero-padded, so concatenating in filename order gives
-    // the same row order a single unchunked run would.
+    // the same row order a single unchunked run would. Merges both the
+    // per-variant chunks and the per-gene chunks (-gene_output).
     label 'low'
     publishDir "${params.results}/08_annotation/alphagenome", mode: params.publish_mode
 
@@ -195,18 +198,23 @@ process MERGE_ALPHAGENOME_CHUNKS {
 
     output:
         path("cohort.alphagenome.tsv"), emit: alphagenome_ch
+        path("cohort.alphagenome.genes.tsv"), emit: alphagenome_gene_ch
 
     script:
     """
     #!/bin/bash
     set -euo pipefail
 
-    files=\$(ls cohort.alphagenome.chunk_*.tsv | sort)
-    head -n 1 \$(echo "\$files" | head -n 1) > cohort.alphagenome.tsv
-    for f in \$files; do
-        tail -n +2 "\$f" >> cohort.alphagenome.tsv
-    done
-    echo "[MERGE_ALPHAGENOME_CHUNKS] \$(echo "\$files" | wc -l) chunk(s), \$(( \$(wc -l < cohort.alphagenome.tsv) - 1 )) row(s)" >&2
+    merge() {  # merge <chunk glob prefix> <output>
+        files=\$(ls \$1.chunk_*.tsv | sort)
+        head -n 1 \$(echo "\$files" | head -n 1) > \$2
+        for f in \$files; do
+            tail -n +2 "\$f" >> \$2
+        done
+        echo "[MERGE_ALPHAGENOME_CHUNKS] \$2: \$(echo "\$files" | wc -l) chunk(s), \$(( \$(wc -l < \$2) - 1 )) row(s)" >&2
+    }
+    merge cohort.alphagenome cohort.alphagenome.tsv
+    merge cohort.alphagenome.genes cohort.alphagenome.genes.tsv
     """
 }
 
@@ -232,6 +240,7 @@ process ALPHAGENOME_API {
 
     output:
         path("cohort.alphagenome_api.tsv"), emit: alphagenome_api_ch
+        path("cohort.alphagenome_api.genes.tsv"), emit: alphagenome_api_gene_ch
 
     script:
     """
@@ -248,6 +257,7 @@ process ALPHAGENOME_API {
         -reference ${hg38_genome} \\
         -quantile_threshold ${params.alphagenome_quantile_threshold ?: 0.99} \\
         ${params.alphagenome_args ?: ''} \\
-        -output cohort.alphagenome_api.tsv
+        -output cohort.alphagenome_api.tsv \\
+        -gene_output cohort.alphagenome_api.genes.tsv
     """
 }

@@ -23,12 +23,17 @@ process VARIANT_REPORT {
         path(alphagenome_tsv, stageAs: 'alphagenome_local/*')
         path(alphagenome_api_tsv, stageAs: 'alphagenome_api/*')
         path(alphamissense_tsv, stageAs: 'alphamissense/*')
+        path(repeat_pairs_tsv, stageAs: 'repeat/*')
+        path(cnv_gene_cn_tsv, stageAs: 'cnv/*')
+        path(alphagenome_gene_tsv, stageAs: 'alphagenome_local_genes/*')
+        path(alphagenome_api_gene_tsv, stageAs: 'alphagenome_api_genes/*')
         path(common_script)
         path(script)
 
     output:
         path("cohort.variant_report.tsv"), emit: variant_report_ch
         path("cohort.variant_funnel.tsv"), emit: variant_funnel_ch
+        path("cohort.sibpair_gene_summary.tsv"), emit: sibpair_gene_summary_ch
 
     script:
     """
@@ -50,7 +55,13 @@ process VARIANT_REPORT {
         -alphagenome_tsv ${alphagenome_tsv} \\
         -alphagenome_api_tsv ${alphagenome_api_tsv} \\
         -alphamissense_tsv ${alphamissense_tsv} \\
+        -repeat_pairs_tsv ${repeat_pairs_tsv} \\
+        -cnv_gene_cn_tsv ${cnv_gene_cn_tsv} \\
+        -alphagenome_gene_tsv ${alphagenome_gene_tsv} \\
+        -alphagenome_api_gene_tsv ${alphagenome_api_gene_tsv} \\
+        -alphagenome_threshold ${params.alphagenome_quantile_threshold ?: 0.99} \\
         -output cohort.variant_report.tsv \\
-        -funnel_output cohort.variant_funnel.tsv
+        -funnel_output cohort.variant_funnel.tsv \\
+        -sibpair_output cohort.sibpair_gene_summary.tsv
     """
 }
