@@ -60,9 +60,9 @@ PYEOF
     # a run once produced a BED whose header had a filename glued in front
     # of it ("<prefix>.straglr.haplotagged.tsv#chrom..."); fail here, in the
     # task that wrote it, rather than letting it reach downstream parsers
-    for f in \${name}.straglr.bed \${name}.straglr.tsv; do
-        ls -l --time-style=full-iso "\$f" >&2
-    done
+    # timestamps are diagnostic only -- never fail the task over them
+    # (this container's ls is BusyBox: --full-time, not --time-style)
+    ls -l --full-time \${name}.straglr.bed \${name}.straglr.tsv >&2 || true
     first=\$(head -n 1 \${name}.straglr.bed)
     if [[ "\$first" != "#chrom"* ]]; then
         echo "[STRAGLR] \${name}.straglr.bed header is malformed: \${first:0:200}" >&2

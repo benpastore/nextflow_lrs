@@ -20,7 +20,9 @@ models), joining everything the pipeline knows about it:
   - AlphaGenome (optional): every tissue x scorer column from
     bin/run_alphagenome.py, from the local run, falling back per variant to
     the API run when the local one didn't score it (alphagenome_source says
-    which)
+    which), plus alphagenome_max_impact: the single largest |quantile_score|
+    over every tissue x scorer, with its sign, tissue and scorer -- one
+    column to sort/filter the whole report on
 
 Optional inputs that are absent (or the pipeline's NO_FILE placeholder)
 just leave their columns empty.
@@ -50,6 +52,41 @@ ALPHAGENOME_ID_COLUMNS = {
     "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT",
     "SOURCE_MODEL", "GENE", "REASON", "SAMPLES",
 }
+
+# run_alphagenome.py's VARIANT_SCORER_KEYS: its per-tissue result columns are
+# <tissue>_<SCORER> (signed quantile_score, max |.| over that tissue's tracks)
+ALPHAGENOME_SCORERS = ("RNA_SEQ", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS", "DNASE", "ATAC", "CHIP_HISTONE")
+MAX_IMPACT_COLUMNS = ["alphagenome_max_impact", "alphagenome_max_impact_signed",
+                      "alphagenome_max_impact_tissue", "alphagenome_max_impact_scorer"]
+
+
+def alphagenome_score_columns(ag_cols):
+    """[(column, tissue, scorer)] for every tissue x scorer result column."""
+    out = []
+    for c in ag_cols:
+        for s in ALPHAGENOME_SCORERS:
+            if c.endswith("_" + s) and len(c) > len(s) + 1:
+                out.append((c, c[:-len(s) - 1], s))
+                break
+    return out
+
+
+def max_impact(ag_row, score_cols):
+    """Largest-|quantile_score| prediction over every target tissue x scorer:
+    {alphagenome_max_impact: |q|, _signed: q, _tissue, _scorer}; empty when
+    nothing was scored."""
+    best = None
+    for col, tissue, scorer in score_cols:
+        try:
+            q = float(ag_row.get(col, ""))
+        except ValueError:
+            continue
+        if best is None or abs(q) > abs(best[0]):
+            best = (q, tissue, scorer)
+    if best is None:
+        return {}
+    q, tissue, scorer = best
+    return dict(zip(MAX_IMPACT_COLUMNS, (f"{abs(q):.4f}", f"{q:.4f}", tissue, scorer)))
 
 # modifier TSV column -> report column; values unioned across both models
 MODIFIER_FIELDS = [
@@ -349,6 +386,7 @@ def main():
             rows, cols = read_alphagenome(path)
             ag_tables.append((source, rows))
             ag_cols = ag_cols or cols
+    ag_score_cols = alphagenome_score_columns(ag_cols)
 
     columns = [
         "VID", "CHROM", "POS", "REF", "ALT", "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT", "allele_flipped",
@@ -360,6 +398,7 @@ def main():
         "alphamissense_status", "alphamissense_pathogenicity", "alphamissense_class", "alphamissense_protein_variant",
         "alphamissense_snpeff_agree", "alphamissense_transcript", "alphamissense_uniprot",
         "alphamissense_gene_mean_pathogenicity", "alphamissense_n_hits", "alphamissense_all_hits",
+        *(MAX_IMPACT_COLUMNS if ag_score_cols else []),
         "alphagenome_source", *[f"alphagenome_{c}" for c in ag_cols],
     ]
 
@@ -415,6 +454,7 @@ def main():
             if pick:
                 row["alphagenome_source"] = pick[0]
                 row.update({f"alphagenome_{c}": pick[1].get(c, "") for c in ag_cols})
+                row.update(max_impact(pick[1], ag_score_cols))
             elif ag_tables:
                 # never sent to AlphaGenome: SV, or dropped by the gnomAD AF
                 # pre-filter (build_alphagenome_input.py -max_af)
