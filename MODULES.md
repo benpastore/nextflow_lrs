@@ -303,11 +303,26 @@ via `bin/consolidate_variants.py`, tagging each variant with which caller(s) fou
 ## 7. Trio-aware pedigree phasing (children only)
 
 ### `WHATSHAP_PHASE_TRIO` — `modules/whatshap/main.nf`
-Additive refinement of the child's small-variant phasing using Mendelian constraints from both
-parents' genotype VCFs (`whatshap phase --ped`). Runs alongside, not instead of, `LONGPHASE_SV` —
-a separate, additionally-published output, not fed back into consolidation.
+Additive refinement of the child's small-variant (SNV/indel) phasing using Mendelian constraints from both
+parents' Clair3 genotype VCFs (`whatshap phase --ped`). Child + father + mother are merged into ONE
+multi-sample VCF first (whatshap only phases the genotypes of its first positional VCF; further files are
+phasing evidence), and the child BAM gets an `@RG SM:<child>` when it lacks one (pedigree mode assigns reads by
+SM). Logs how many het SNVs were phased. Runs alongside, not instead of, `LONGPHASE_SV` — a separate,
+additionally-published output, not fed back into consolidation. SVs aren't included (whatshap can't phase them).
 - **in**: `tuple val(ref), val(ref_fai)`, `tuple val(child), val(father), val(mother), val(child_vcf), val(child_bam), val(child_bai), val(father_vcf), val(mother_vcf)`
-- **out**: `tuple val(child), path("*.trio.whatshapphase.vcf.gz"), path("*.trio.whatshapphase.vcf.gz.tbi")` → `whatshap_phase_trio_ch`
+- **out**: `tuple val(child), path("<child>.trio.whatshapphase.vcf.gz"), path(.tbi)` → `whatshap_phase_trio_ch` (child only);
+  `<child>.trio.family.whatshapphase.vcf.gz` → `whatshap_phase_trio_family_ch` (all three)
+
+### `SV_TRIO_ORIGIN` — `modules/sv_trio_origin/main.nf`
+Parent of origin for each child Sniffles SV (`bin/sv_trio_origin.py`). Parents get their own `SNIFFLES` run in
+`subworkflows/trio.nf`. Two lines of evidence: **transmission** (SV also in father's / mother's Sniffles calls —
+same type with INS~DUP compatible, start within `recessive_modifier_sv_merge_dist`, size ratio ≥ 0.5) and
+**haplotype** (the SV's Sniffles `PHASE` hp/block, with each LONGPHASE round-1 block's HP1 assigned to a parent from
+the child's phased het SNVs where the parents' genotypes differ; ≥ 3 informative SNVs, ≥ 80% agreement).
+- **in**: `tuple val(child), val(child_sv), val(child_snv), val(father), val(mother), val(father_snv), val(mother_snv), val(father_sv), val(mother_sv)`
+- **out** (`06_variants/sv_trio_origin`): `<child>.sv_trio_origin.tsv` (per SV: transmission, haplotype_origin, origin,
+  origin_source = transmission+haplotype / transmission / haplotype / conflict), `<child>.sv_trio_blocks.tsv`
+  (per block: informative SNVs, HP1 parent)
 
 ---
 

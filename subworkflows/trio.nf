@@ -3,6 +3,7 @@ nextflow.enable.dsl=2
 include { YAK_COUNT } from '../modules/yak/main.nf'
 include { minimap2 } from './ont.nf'
 include { clair3 } from './ont.nf'
+include { sniffles } from './ont.nf'
 
 // Trio-aware haplotype-family analysis. Parents have no Illumina data --
 // they're sequenced on ONT the same as children, just listed as ordinary
@@ -15,6 +16,8 @@ include { clair3 } from './ont.nf'
 //     trio-binning
 //   - minimap2 + clair3 genotype-only VCF (the pipeline's own ONT
 //     small-variant caller, reused as-is) for WhatsHap pedigree phasing
+//   - sniffles SV calls on the same alignment, for the child SVs' parent
+//     of origin (SV_TRIO_ORIGIN, bin/sv_trio_origin.py)
 // -- and hands back non_parent_ont_ch for main.nf to use in place of the
 // full ont_ch for every other section of the pipeline.
 workflow trio_family {
@@ -47,6 +50,12 @@ workflow trio_family {
         clair3( samtools_fai_index, minimap2.out.bams )
         parent_vcf_ch = clair3.out.clair3_ch.map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
 
+        // parents' own SV calls (same Sniffles module as the children; the
+        // parental BAM isn't haplotagged, so their PHASE fields are just
+        // empty) -- published to 06_variants/sniffles next to the children's
+        sniffles( minimap2.out.bams )
+        parent_sv_ch = sniffles.out.sniffles_ch.map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
+
         // resolve full trios against yak/parent-vcf by collecting each into a
         // plain map and looking children up against it, rather than
         // Channel.join() -- join() consumes each channel item once, so it
@@ -72,8 +81,19 @@ workflow trio_family {
             .combine( vcf_map_ch )
             .map { child, father, mother, vcf_map -> tuple(child, father, mother, vcf_map[father], vcf_map[mother]) }
 
+        sv_map_ch = parent_sv_ch
+            .toList()
+            .map { list -> list.collectEntries { sampleID, vcf -> [(sampleID): vcf] } }
+
+        trio_sv_ch = trio_phasing_ch
+            .combine( sv_map_ch )
+            .map { child, father, mother, father_vcf, mother_vcf, sv_map ->
+                tuple(child, father, mother, father_vcf, mother_vcf, sv_map[father], sv_map[mother])
+            }
+
     emit:
         trio_assembly     = trio_yak_ch        // tuple(child, paternal_yak, maternal_yak)
         trio_phasing      = trio_phasing_ch    // tuple(child, father, mother, father_vcf, mother_vcf)
+        trio_sv           = trio_sv_ch         // tuple(child, father, mother, father_vcf, mother_vcf, father_sv_vcf, mother_sv_vcf)
         non_parent_ont_ch = non_parent_ont_ch  // tuple(sampleID, unal_bam, fastq) -- everyone except parents
 }

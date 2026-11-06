@@ -209,6 +209,7 @@ include { repeat_compare } from '../../subworkflows/ont.nf'
 include { herro_correction } from '../../subworkflows/herro.nf'
 include { trio_family } from '../../subworkflows/trio.nf'
 include { WHATSHAP_PHASE_TRIO } from '../../modules/whatshap/main.nf'
+include { SV_TRIO_ORIGIN } from '../../modules/sv_trio_origin/main.nf'
 include { pod5_basecall } from '../../subworkflows/pod5.nf'
 
 // to add
@@ -747,6 +748,20 @@ workflow {
                 }
 
             WHATSHAP_PHASE_TRIO( samtools_fai_index, trio_phasing_input )
+
+            // SV parent of origin: child Sniffles calls vs the parents' own
+            // Sniffles calls (transmission) + the SV's longphase haplotype
+            // mapped to a parent via the child's phased SNVs (haplotype).
+            // Sniffles ran on LONGPHASE round 1's haplotagged BAM (haplo_ch),
+            // so its phase blocks match round 1's VCF, not longphase_sv's.
+            sv_trio_input = sniffles.out.sniffles_ch
+                .map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
+                .join( longphase.out.longphase_vcf_ch.map { sampleID, vcf, tbi -> tuple(sampleID, vcf) } )
+                .join( trio_family.out.trio_sv )
+                .map { sampleID, child_sv, child_snv, father, mother, father_snv, mother_snv, father_sv, mother_sv ->
+                    tuple(sampleID, child_sv, child_snv, father, mother, father_snv, mother_snv, father_sv, mother_sv)
+                }
+            SV_TRIO_ORIGIN( sv_trio_input, file("${params.bin}/sv_trio_origin.py") )
         }
 
     }

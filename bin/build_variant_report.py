@@ -477,6 +477,7 @@ def write_sibpair_gene_summary(path, gene_rows, family_json, report_rows, repeat
     # genes the pair's passing variants are predicted to affect, beyond the
     # modifier genes themselves
     pair_variants = defaultdict(set)
+    ag_target_mild = defaultdict(set)  # gene -> mild children whose passing variants are predicted to affect it
     for (mild, sev, _gene), b in list(buckets.items()):
         pair_variants[(mild, sev)].update(b["variants"])
     for (mild, sev), keys in pair_variants.items():
@@ -493,6 +494,7 @@ def write_sibpair_gene_summary(path, gene_rows, family_json, report_rows, repeat
                 b["source"] = "alphagenome_target"
                 b["variants"].add(key)
                 b["models"].update(variant_models[key])
+                ag_target_mild[gene].add(mild)
 
     cols = ["MILD_SAMPLE", "SEVERE_SAMPLE", "GENE", "row_source", "n_mild_with_gene", "models", "n_variants",
             # AlphaGenome prediction about THIS gene (per-gene table)
@@ -553,7 +555,9 @@ def write_sibpair_gene_summary(path, gene_rows, family_json, report_rows, repeat
 
         rows.append({
             "MILD_SAMPLE": mild, "SEVERE_SAMPLE": sev, "GENE": gene, "row_source": b["source"],
-            "n_mild_with_gene": len(mild_with_gene[gene]),
+            # modifier rows: mild children with passing variants IN the gene;
+            # alphagenome_target rows: ... whose passing variants are predicted to AFFECT it
+            "n_mild_with_gene": len(mild_with_gene[gene] if b["source"] == "modifier_gene" else ag_target_mild[gene]),
             "models": ",".join(sorted(b["models"])), "n_variants": len(b["variants"]),
             # yes = AlphaGenome scored this gene; no = variants were scored but
             # this gene wasn't among their genes (outside the window, or a

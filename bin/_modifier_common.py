@@ -201,7 +201,25 @@ CDS_TERMS = {
     'splice_acceptor_variant',
     'splice_region_variant',
 }
-ALLOWED_ANNOTATIONS = CDS_TERMS | {
+# Structural-variant consequences snpEff writes for symbolic SVs (<DEL>,
+# <DUP>, <INV>, <INS>, <BND>) -- without these, only SVs that ALSO carry an
+# intron/upstream/downstream term got through, which in practice let
+# deletions pass and silently dropped most duplications, inversions and
+# breakends (whole-gene / exon-level events, the most interesting ones).
+# Matched as substrings below, so 'gene_fusion' also covers
+# 'bidirectional_gene_fusion'.
+SV_TERMS = {
+    'exon_loss_variant',
+    'transcript_ablation',
+    'feature_ablation',
+    'duplication',
+    'inversion',
+    'gene_fusion',
+    'feature_fusion',
+    'rearranged_at_DNA_level',
+    'structural_interaction_variant',
+}
+ALLOWED_ANNOTATIONS = CDS_TERMS | SV_TERMS | {
     'exon_variant',
     'intron_variant',
     'upstream_gene_variant',
@@ -292,7 +310,15 @@ def parse_consolidated_vcf(path):
             if not filtered_ann:
                 filtered_ann_type += 1
                 continue
-            filtered_ann = [a for a in filtered_ann if len(a) > 7 and a[7] == PROTEIN_CODING_BIOTYPE]
+            # gene-level SV annotations (whole-gene duplication, gene fusion,
+            # ...; Feature_Type a[5] is not "transcript") carry no biotype at
+            # all -- keep those when the consequence is an SV term rather
+            # than dropping them as "not protein-coding". Transcript-level
+            # annotations still need protein_coding (an empty biotype there
+            # means a non-coding transcript).
+            filtered_ann = [a for a in filtered_ann if len(a) > 7 and (
+                a[7] == PROTEIN_CODING_BIOTYPE
+                or (a[7] == "" and a[5] != "transcript" and any(t in a[1] for t in SV_TERMS)))]
             if not filtered_ann:
                 filtered_not_protein_coding += 1
                 continue
