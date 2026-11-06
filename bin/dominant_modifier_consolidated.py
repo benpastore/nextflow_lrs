@@ -235,7 +235,8 @@ def main():
     if args.gnomad_chm13_vcf:
         gnomad_annotator = GnomadNFEAnnotator(args.gnomad_chm13_vcf)
     kg_annotator = None
-    if args.kg_af_vcf:
+    # the pipeline's NO_FILE placeholder means "not provided"
+    if args.kg_af_vcf and args.kg_af_vcf.rstrip("/").split("/")[-1] != "NO_FILE":
         kg_annotator = GnomadNFEAnnotator(args.kg_af_vcf, field="AF", label="1000 Genomes EUR")
 
     res, gene_summary = run(discordant_groups, concordant_severe, manifest, args.sv_merge_dist, gnomad_annotator,

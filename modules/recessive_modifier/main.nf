@@ -31,7 +31,10 @@ process RECESSIVE_MODIFIER {
         path("*.dominant_modifier.gene_summary.tsv"), emit: dominant_modifier_gene_summary_ch
 
     script:
-    def kg_arg = kg_af_vcf.name != 'NO_FILE' ? "-kg_af_vcf ${kg_af_vcf}" : ''
+    // compare the staged path's last component as a string -- with a
+    // stageAs glob the input isn't a plain Path, so .name != 'NO_FILE' let
+    // the placeholder through ("-kg_af_vcf kg_af/NO_FILE", file not found)
+    def kg_arg = kg_af_vcf.toString().tokenize('/')[-1] != 'NO_FILE' ? "-kg_af_vcf ${kg_af_vcf}" : ''
     """
     #!/bin/bash
     set -euo pipefail
