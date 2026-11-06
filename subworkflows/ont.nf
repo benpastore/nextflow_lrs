@@ -466,6 +466,33 @@ workflow snpeff {
         snpeff_stats_ch = SNPEFF.out.snpeff_stats_ch
 }
 
+include { KG_AF_SITES; KG_AF_MERGE } from '../modules/kg_af/main.nf'
+workflow kg_af {
+
+    // 1000 Genomes CHM13 EUR sites VCF for the modifier search's kg_AF_EUR
+    // column: params.kg_af_vcf as-is, else the copy an earlier run's
+    // KG_AF_MERGE published, else build it from params.kg_chm13_vcfs
+    // (one KG_AF_SITES task per chromosome file)
+    main :
+        def cached = file("${params.kg_af_dir ?: "${params.results}/00_resources/1kg_chm13"}/1kgp.chm13.EUR.sites.vcf.gz")
+        if (params.kg_af_vcf) {
+            kg_sites_ch = Channel.value(file(params.kg_af_vcf, checkIfExists: true))
+        } else if (cached.exists()) {
+            kg_sites_ch = Channel.value(cached)
+        } else {
+            if (!params.kg_panel) { exit 1, 'params.kg_panel not set! (1KGP pedigree/population panel, required to build the EUR AF file from params.kg_chm13_vcfs)' }
+            KG_AF_SITES(
+                Channel.fromPath(params.kg_chm13_vcfs, checkIfExists: true),
+                file(params.kg_panel, checkIfExists: true)
+            )
+            KG_AF_MERGE( KG_AF_SITES.out.sites_ch.collect() )
+            kg_sites_ch = KG_AF_MERGE.out.kg_af_ch.map { vcf, tbi -> vcf }
+        }
+
+    emit :
+        kg_af_ch = kg_sites_ch
+}
+
 include { RECESSIVE_MODIFIER } from '../modules/recessive_modifier/main.nf'
 workflow recessive_modifier {
 
@@ -473,10 +500,11 @@ workflow recessive_modifier {
         family_json    // path to family.json
         vcf_manifest   // path: sampleID<TAB>snpeff_vcf_path, one per sample
         vcfs           // collected list of every sample's snpeff vcf (staged alongside the manifest)
+        kg_af_vcf      // 1000 Genomes CHM13 EUR sites VCF (kg_af workflow), or file("NO_FILE")
 
     main :
         RECESSIVE_MODIFIER(
-            family_json, vcf_manifest, vcfs,
+            family_json, vcf_manifest, vcfs, kg_af_vcf,
             file("${params.bin}/_modifier_common.py"),
             file("${params.bin}/recessive_modifier_consolidated.py"),
             file("${params.bin}/dominant_modifier_consolidated.py")
@@ -571,6 +599,73 @@ workflow alphagenome {
         hg38_vcf_ch = scoring_vcf_ch       // candidates in hg38 coords (also used for AlphaMissense lookup)
         candidate_vcf_ch = BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch   // post-SV/AF-filter input, for the variant funnel
 }
+
+include { FETCH_CHM13_TO_HG38_CHAIN as FETCH_CHM13_TO_HG38_CHAIN_AM } from '../modules/alphagenome/main.nf'
+include { PREPARE_ALPHAMISSENSE_INDEX; BUILD_ALPHAMISSENSE_INPUT; LIFTOVER_ALPHAMISSENSE_VARIANTS; ALPHAMISSENSE } from '../modules/alphamissense/main.nf'
+workflow alphamissense {
+
+    take :
+        recessive_modifier_tsv   // cohort.recessive_modifier.tsv
+        dominant_modifier_tsv    // cohort.dominant_modifier.tsv
+        hg38_fai_index           // tuple path(hg38 FASTA), path(its .fai)
+        skip_liftover            // true when params.genome_version == "HG38"
+
+    main :
+        // tabix-indexed AlphaMissense table: params.alphamissense_tsv itself
+        // if it already has a .tbi, else the copy an earlier run's
+        // PREPARE_ALPHAMISSENSE_INDEX published, else build that copy now
+        def am_tsv = file(params.alphamissense_tsv, checkIfExists: true)
+        def index_dir = params.alphamissense_index_dir ?: "${params.results}/00_resources/alphamissense"
+        def am_stem = am_tsv.name.replaceAll(/\.tsv(\.gz)?$/, '')   // same name PREPARE_ALPHAMISSENSE_INDEX publishes
+        def cached = file("${index_dir}/${am_stem}.tabix.tsv.gz")
+        if (file("${am_tsv}.tbi").exists()) {
+            am_index_ch = Channel.value(tuple(am_tsv, file("${am_tsv}.tbi")))
+        } else if (cached.exists() && file("${cached}.tbi").exists()) {
+            am_index_ch = Channel.value(tuple(cached, file("${cached}.tbi")))
+        } else {
+            PREPARE_ALPHAMISSENSE_INDEX( am_tsv, file("${params.bin}/index_alphamissense.py") )
+            am_index_ch = PREPARE_ALPHAMISSENSE_INDEX.out.index_ch
+        }
+
+        BUILD_ALPHAMISSENSE_INPUT(
+            recessive_modifier_tsv, dominant_modifier_tsv,
+            file("${params.bin}/build_alphagenome_input.py")
+        )
+
+        if (skip_liftover) {
+            hg38_vcf_ch = BUILD_ALPHAMISSENSE_INPUT.out.candidate_vcf_ch
+            unmap_ch = Channel.value(file("NO_FILE"))
+        } else {
+            // same chain as the alphagenome workflow: params.chm13_to_hg38_chain,
+            // else the copy FETCH_CHM13_TO_HG38_CHAIN already published, else fetch
+            def fetched_chain = file("${params.results}/00_resources/liftover/chm13v2-hg38.over.chain.gz")
+            if (params.chm13_to_hg38_chain) {
+                chain_ch = Channel.value(file(params.chm13_to_hg38_chain, checkIfExists: true))
+            } else if (fetched_chain.exists()) {
+                chain_ch = Channel.value(fetched_chain)
+            } else {
+                FETCH_CHM13_TO_HG38_CHAIN_AM()
+                chain_ch = FETCH_CHM13_TO_HG38_CHAIN_AM.out.chain_ch
+            }
+
+            LIFTOVER_ALPHAMISSENSE_VARIANTS( BUILD_ALPHAMISSENSE_INPUT.out.candidate_vcf_ch, chain_ch, hg38_fai_index )
+            hg38_vcf_ch = LIFTOVER_ALPHAMISSENSE_VARIANTS.out.lifted_vcf_ch
+            unmap_ch = LIFTOVER_ALPHAMISSENSE_VARIANTS.out.unmapped_ch
+        }
+
+        ALPHAMISSENSE(
+            BUILD_ALPHAMISSENSE_INPUT.out.candidate_vcf_ch,
+            hg38_vcf_ch,
+            unmap_ch,
+            am_index_ch,
+            params.alphamissense_gene_tsv ? file(params.alphamissense_gene_tsv, checkIfExists: true) : file("NO_FILE"),
+            file("${params.bin}/run_alphamissense.py")
+        )
+
+    emit :
+        alphamissense_ch = ALPHAMISSENSE.out.alphamissense_ch
+}
+
 include { VARIANT_REPORT } from '../modules/variant_report/main.nf'
 workflow variant_report {
 
@@ -585,12 +680,13 @@ workflow variant_report {
         unmap                    // liftover .unmap file, or file("NO_FILE")
         alphagenome_tsv          // local-backend AlphaGenome scores, or file("NO_FILE")
         alphagenome_api_tsv      // API-backend AlphaGenome scores, or file("NO_FILE")
+        alphamissense_tsv        // run_alphamissense.py results, or file("NO_FILE")
 
     main :
         VARIANT_REPORT(
             recessive_modifier_tsv, dominant_modifier_tsv, family_json,
             vcf_manifest, vcfs,
-            candidate_vcf, hg38_vcf, unmap, alphagenome_tsv, alphagenome_api_tsv,
+            candidate_vcf, hg38_vcf, unmap, alphagenome_tsv, alphagenome_api_tsv, alphamissense_tsv,
             file("${params.bin}/_modifier_common.py"),
             file("${params.bin}/build_variant_report.py")
         )

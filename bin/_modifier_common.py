@@ -79,20 +79,26 @@ class GnomadNFEAnnotator:
     assembly (e.g. Ensembl's GCA_009914755.4 rapid-release gnomAD VCF) --
     since our variants are called against CHM13/hs1, no liftOver is needed
     as long as the resource is already in that coordinate system.
+
+    `field` picks the INFO allele-frequency key, so the same class also reads
+    the 1000 Genomes CHM13 sites file (field="AF", see
+    modules/kg_af/main.nf); `label` just names the source in the logs.
     """
 
-    def __init__(self, gnomad_vcf_path=None):
+    def __init__(self, gnomad_vcf_path=None, field="AF_nfe", label="gnomAD"):
         self.gnomad_vcf_path = gnomad_vcf_path
+        self.field = field
+        self.label = label
 
     def load(self):
         """No-op, kept for callers: the lookup is targeted, done in annotate_batch()."""
         if not self.gnomad_vcf_path:
-            logger.warning("No gnomAD CHM13 VCF provided")
+            logger.warning(f"No {self.label} CHM13 VCF provided")
 
     @timing
     def annotate_batch(self, variants):
         """
-        variants: list of (chrom, pos, ref, alt) -> dict variant_id -> AF_nfe or None
+        variants: list of (chrom, pos, ref, alt) -> dict variant_id -> AF (self.field) or None
 
         Single streaming pass over the gnomAD VCF that only keeps records
         matching the given (already-filtered) candidates -- the full
@@ -104,6 +110,7 @@ class GnomadNFEAnnotator:
             return results
 
         # cheap (chrom, pos) prefilter so INFO is only parsed for candidate sites
+        key = f"{self.field}="
         wanted_sites = {(c, str(p)) for c, p, _, _ in variants}
 
         logger.info(f"Scanning {self.gnomad_vcf_path} for {len(results):,} candidate variants...")
@@ -133,7 +140,7 @@ class GnomadNFEAnnotator:
 
                 af_nfe = None
                 for entry in info.split(';'):
-                    if entry.startswith('AF_nfe='):
+                    if entry.startswith(key):
                         af_nfe = entry.split('=', 1)[1]
                         break
 
@@ -154,15 +161,28 @@ class GnomadNFEAnnotator:
                         except ValueError:
                             continue
 
-        logger.info(f"gnomAD scan done: {n_records:,} records scanned, "
-                    f"AF_nfe found for {n_found:,}/{len(results):,} candidates")
+        logger.info(f"{self.label} scan done: {n_records:,} records scanned, "
+                    f"{self.field} found for {n_found:,}/{len(results):,} candidates")
         if n_malformed:
             logger.warning(f"Skipped {n_malformed:,} malformed (<8 column) line(s) in "
                            f"{self.gnomad_vcf_path} -- check the file isn't truncated/corrupt")
         if n_records and not n_found:
-            logger.warning("No candidate matched gnomAD -- check that the VCF's INFO field is "
-                           "named exactly 'AF_nfe' and its contig names match (chr1 / 1)")
+            logger.warning(f"No candidate matched {self.label} -- check that the VCF's INFO field is "
+                           f"named exactly '{self.field}' and its contig names match (chr1 / 1)")
         return results
+
+
+def annotate_final_pass(final_pass, annotator):
+    """{(var_id, gene): AF or None} for every final-pass candidate, via one
+    annotator (GnomadNFEAnnotator) pass; {} when the annotator is None."""
+    if annotator is None:
+        return {}
+    logger.info(f"Annotating passing variants with {annotator.label} {annotator.field}...")
+    annotator.load()
+    batch = [(key, info["rec"]["chrom"], info["rec"]["pos"], info["rec"]["ref"], info["rec"]["alt"])
+             for key, info in final_pass.items()]
+    results = annotator.annotate_batch([(c, p, r, a) for _, c, p, r, a in batch])
+    return {key: results.get(f"{chrom}:{pos}:{ref}>{alt}") for key, chrom, pos, ref, alt in batch}
 
 
 # CDS-affecting terms -- SnpEff doesn't tag most coding changes with a

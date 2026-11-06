@@ -12,9 +12,11 @@ models), joining everything the pipeline knows about it:
     same CALLER_PRIORITY the modifier search trusts), split mild/severe by
     family.json phenotype
   - snpEff: the most severe ANN entry for the variant's candidate gene(s)
-  - AlphaMissense (optional): hg38 lookup, SNVs only -- max am_pathogenicity
-    across transcripts; skipped for ALLELE_FLIPPED variants (hg38's reference
-    residue is the candidate allele, so there's no missense change to score)
+  - AlphaMissense (optional): bin/run_alphamissense.py's per-candidate
+    result -- status (scored / not_missense / not_snv / ...), the
+    highest-scoring transcript's pathogenicity + class, and whether its
+    protein change matches one of snpEff's (CHM13 RefSeq) HGVS.p calls for
+    the variant (alphamissense_snpeff_agree)
   - AlphaGenome (optional): every tissue x scorer column from
     bin/run_alphagenome.py, from the local run, falling back per variant to
     the API run when the local one didn't score it (alphagenome_source says
@@ -25,7 +27,7 @@ just leave their columns empty.
 
 Also writes a variant funnel (-funnel_output): how many variants enter
 and leave each step (modifier search -> AlphaGenome input -> liftover ->
-AlphaGenome -> report), counted from each step's actual output files rather
+AlphaGenome / AlphaMissense -> report), counted from each step's actual output files rather
 than by re-applying its filters, so it reflects what really happened.
 """
 import argparse
@@ -74,7 +76,7 @@ def read_modifier_tsvs(paths):
                 n_rows[model] += 1
                 key = (row["#CHROM"], row["POS"], row["REF"], row["ALT"])
                 v = variants.setdefault(key, {
-                    "models": set(), "samples": set(), "gnomad_AF_NFE": "",
+                    "models": set(), "samples": set(), "gnomad_AF_NFE": "", "kg_AF_EUR": "",
                     **{out: set() for _, out in MODIFIER_FIELDS},
                 })
                 v["models"].add(model)
@@ -83,8 +85,9 @@ def read_modifier_tsvs(paths):
                         if val:
                             v[out].add(val)
                 v["samples"].update(s for s in (row.get("samples") or "").split(",") if s)
-                if not v["gnomad_AF_NFE"] and row.get("gnomad_AF_NFE"):
-                    v["gnomad_AF_NFE"] = row["gnomad_AF_NFE"]
+                for af_col in ("gnomad_AF_NFE", "kg_AF_EUR"):
+                    if not v[af_col] and row.get(af_col):
+                        v[af_col] = row[af_col]
     return variants, n_rows
 
 
@@ -171,32 +174,49 @@ def read_hg38_vcf(path):
     return lifted
 
 
-def scan_alphamissense(path, wanted):
-    """Stream AlphaMissense_hg38.tsv.gz (#CHROM POS REF ALT genome
-    uniprot_id transcript_id protein_variant am_pathogenicity am_class) for
-    the wanted hg38 SNVs; keep the max-pathogenicity transcript per variant."""
-    hits = {}
-    n = 0
-    with opener(path) as f:
-        for line in f:
-            if line.startswith("#"):
-                continue
-            n += 1
-            head = line.split("\t", 4)
-            key = tuple(head[:4])
-            if key not in wanted:
-                continue
-            fields = line.rstrip("\n").split("\t")
-            score = float(fields[8])
-            if key not in hits or score > hits[key]["alphamissense_pathogenicity"]:
-                hits[key] = {
-                    "alphamissense_pathogenicity": score,
-                    "alphamissense_class": fields[9],
-                    "alphamissense_protein_variant": fields[7],
-                    "alphamissense_transcript": fields[6],
-                }
-    logger.info(f"AlphaMissense: scanned {n:,} rows, matched {len(hits)}/{len(wanted)} candidate SNV(s)")
-    return hits
+# run_alphamissense.py column -> report column
+ALPHAMISSENSE_FIELDS = [
+    ("status", "alphamissense_status"), ("am_pathogenicity", "alphamissense_pathogenicity"),
+    ("am_class", "alphamissense_class"), ("am_protein_variant", "alphamissense_protein_variant"),
+    ("am_transcript", "alphamissense_transcript"), ("am_uniprot", "alphamissense_uniprot"),
+    ("am_gene_mean_pathogenicity", "alphamissense_gene_mean_pathogenicity"),
+    ("am_n_hits", "alphamissense_n_hits"), ("am_all_hits", "alphamissense_all_hits"),
+]
+
+AA3TO1 = {
+    "Ala": "A", "Arg": "R", "Asn": "N", "Asp": "D", "Cys": "C", "Gln": "Q", "Glu": "E", "Gly": "G",
+    "His": "H", "Ile": "I", "Leu": "L", "Lys": "K", "Met": "M", "Phe": "F", "Pro": "P", "Ser": "S",
+    "Thr": "T", "Trp": "W", "Tyr": "Y", "Val": "V", "Sec": "U", "Pyl": "O", "Ter": "*",
+}
+
+
+def read_alphamissense(path):
+    """VID -> row from a run_alphamissense.py TSV."""
+    with open(path, newline="") as f:
+        return {row["VID"]: row for row in csv.DictReader(f, delimiter="\t")}
+
+
+def hgvs_p_short(hgvs_p):
+    """snpEff HGVS.p missense (p.Val600Glu) -> AlphaMissense style (V600E);
+    "" for anything else (synonymous, frameshift, ...)."""
+    p = hgvs_p[2:] if hgvs_p.startswith("p.") else hgvs_p
+    if len(p) < 7 or not p[3:-3].isdigit():
+        return ""
+    ref, alt = AA3TO1.get(p[:3]), AA3TO1.get(p[-3:])
+    return f"{ref}{p[3:-3]}{alt}" if ref and alt else ""
+
+
+def snpeff_agrees(ann_entries, am_all_hits):
+    """yes = one of AlphaMissense's protein changes equals a snpEff missense
+    HGVS.p for the variant (same residue, position and substitution -- a
+    consistency check on the liftover and gene); no = snpEff has missense
+    calls but none match (usually a different isoform's numbering); "" =
+    snpEff calls no missense change here."""
+    snpeff = {hgvs_p_short(a[10]) for a in ann_entries if len(a) > 10 and "missense" in a[1]} - {""}
+    if not snpeff:
+        return ""
+    am = {h.split(":", 1)[1].split("=", 1)[0] for h in am_all_hits.split("|") if ":" in h}
+    return "yes" if snpeff & am else "no"
 
 
 def read_vcf_ids(path):
@@ -219,7 +239,7 @@ def count_unmap_reasons(path):
     return reasons
 
 
-def build_funnel(variants, n_rows, candidate_ids, lifted, unmap_reasons, ag_tables, am_hits, n_report):
+def build_funnel(variants, n_rows, candidate_ids, lifted, unmap_reasons, ag_tables, am_rows, n_report):
     """[(step, metric, count, description)] -- see module docstring."""
     rows = []
     add = lambda step, metric, n, desc: rows.append((step, metric, n, desc))
@@ -237,7 +257,8 @@ def build_funnel(variants, n_rows, candidate_ids, lifted, unmap_reasons, ag_tabl
     if candidate_ids is not None:
         n_af = sum(1 for k in variants if not k[3].startswith("<") and "_".join(k) not in candidate_ids)
         add("2_alphagenome_input", "removed_symbolic_sv", n_sv, "symbolic-ALT SVs, not liftable/scoreable")
-        add("2_alphagenome_input", "removed_gnomad_af", n_af, "gnomAD AF_nfe above alphagenome_max_af (unannotated AF kept)")
+        add("2_alphagenome_input", "removed_common_af", n_af,
+            "gnomAD AF_nfe and 1000 Genomes EUR AF both >= alphagenome_max_af where annotated (unannotated kept)")
         add("2_alphagenome_input", "submitted", len(candidate_ids), "sent on to liftover / AlphaGenome")
 
     if lifted:
@@ -265,8 +286,23 @@ def build_funnel(variants, n_rows, candidate_ids, lifted, unmap_reasons, ag_tabl
         add(step, "scoring_failed", status["scoring_failed"], "every scorer failed")
         add(step, "liftover_failed", status["liftover_failed"], "no hg38 coordinates, not scored")
 
-    if am_hits or lifted:
-        add("5_report", "alphamissense_matched", len(am_hits), "hg38 SNVs with an AlphaMissense score (non-flipped only)")
+    if am_rows:
+        status = defaultdict(int)
+        am_class = defaultdict(int)
+        for r in am_rows.values():
+            status[r.get("status", "")] += 1
+            if r.get("status") == "scored":
+                am_class[r.get("am_class", "")] += 1
+        step = "4_alphamissense"
+        add(step, "input_rows", len(am_rows), "candidates looked up (same SV/AF pre-filter as AlphaGenome)")
+        for s, desc in (("not_snv", "indel/MNV/SV, AlphaMissense scores SNVs only"),
+                        ("liftover_failed", "no hg38 coordinates"),
+                        ("hg38_ref_is_candidate", "hg38 reference base is the candidate allele, nothing to score"),
+                        ("not_missense", "lifted SNV, not a missense change in an AlphaMissense transcript"),
+                        ("scored", "missense SNVs with an AlphaMissense score")):
+            add(step, s, status[s], desc)
+        for c in ("likely_pathogenic", "ambiguous", "likely_benign"):
+            add(step, f"scored_{c}", am_class[c], f"  of which am_class = {c}")
     add("5_report", "report_rows", n_report, "END: rows in cohort.variant_report.tsv (should equal unique_variants)")
     return rows
 
@@ -286,7 +322,7 @@ def main():
     p.add_argument("-family_json", required=True)
     p.add_argument("-vcf_manifest", required=True, help="sampleID<TAB>snpeff_vcf, VCFs staged alongside")
     p.add_argument("-hg38_vcf", default="", help="Lifted (or already-hg38) candidate VCF, ID = original VID")
-    p.add_argument("-alphamissense_tsv", default="", help="AlphaMissense_hg38.tsv.gz")
+    p.add_argument("-alphamissense_tsv", default="", help="run_alphamissense.py output")
     p.add_argument("-alphagenome_tsv", default="", help="run_alphagenome.py output, local backend")
     p.add_argument("-alphagenome_api_tsv", default="", help="run_alphagenome.py output, API backend")
     p.add_argument("-candidate_vcf", default="", help="AlphaGenome input VCF (build_alphagenome_input.py), for the funnel")
@@ -304,15 +340,7 @@ def main():
     lifted = read_hg38_vcf(args.hg38_vcf) if present(args.hg38_vcf) else {}
     vid_of = {key: "_".join(key) for key in variants}
 
-    am_hits = {}
-    if present(args.alphamissense_tsv):
-        if not lifted:
-            logger.warning("AlphaMissense requested but no hg38 candidate VCF -- skipping (needs hg38 coordinates)")
-        else:
-            wanted = {lifted[vid][:4] for vid in vid_of.values()
-                      if vid in lifted and not lifted[vid][4]
-                      and len(lifted[vid][2]) == 1 and len(lifted[vid][3]) == 1}
-            am_hits = scan_alphamissense(args.alphamissense_tsv, wanted)
+    am_rows = read_alphamissense(args.alphamissense_tsv) if present(args.alphamissense_tsv) else {}
 
     ag_tables = []
     ag_cols = []
@@ -327,9 +355,11 @@ def main():
         "source_model", *[out for _, out in MODIFIER_FIELDS],
         "modifier_samples", "N_modifier_samples",
         "N_mild_carriers", "mild_carriers", "N_severe_carriers", "severe_carriers", "other_carriers",
-        "gnomad_AF_NFE",
+        "gnomad_AF_NFE", "kg_AF_EUR",
         "snpeff_effect", "snpeff_impact", "snpeff_gene", "snpeff_transcript", "snpeff_hgvs_c", "snpeff_hgvs_p",
-        "alphamissense_pathogenicity", "alphamissense_class", "alphamissense_protein_variant", "alphamissense_transcript",
+        "alphamissense_status", "alphamissense_pathogenicity", "alphamissense_class", "alphamissense_protein_variant",
+        "alphamissense_snpeff_agree", "alphamissense_transcript", "alphamissense_uniprot",
+        "alphamissense_gene_mean_pathogenicity", "alphamissense_n_hits", "alphamissense_all_hits",
         "alphagenome_source", *[f"alphagenome_{c}" for c in ag_cols],
     ]
 
@@ -348,7 +378,7 @@ def main():
                 **{out: ",".join(sorted(v[out])) for _, out in MODIFIER_FIELDS},
                 "modifier_samples": ",".join(sorted(v["samples"])),
                 "N_modifier_samples": len(v["samples"]),
-                "gnomad_AF_NFE": v["gnomad_AF_NFE"],
+                "gnomad_AF_NFE": v["gnomad_AF_NFE"], "kg_AF_EUR": v["kg_AF_EUR"],
             }
 
             by_pheno = defaultdict(list)
@@ -366,8 +396,17 @@ def main():
                 hg = lifted[vid]
                 row.update({"HG38_CHROM": hg[0], "HG38_POS": hg[1], "HG38_REF": hg[2], "HG38_ALT": hg[3],
                             "allele_flipped": hg[4]})
-                if not hg[4]:
-                    row.update(am_hits.get(hg[:4], {}))
+
+            am = am_rows.get(vid)
+            if am:
+                row.update({out: am.get(src, "") for src, out in ALPHAMISSENSE_FIELDS})
+                if am.get("status") == "scored":
+                    row["alphamissense_snpeff_agree"] = snpeff_agrees(ann.get(key, []), am.get("am_all_hits", ""))
+                # AlphaMissense lifts every candidate (AlphaGenome skips common ones)
+                if not row.get("HG38_CHROM") and am.get("HG38_CHROM"):
+                    row.update({c: am[c] for c in ("HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT")})
+            elif am_rows:
+                row["alphamissense_status"] = "not_submitted"
 
             # local result wins when it scored; otherwise the first table
             # that did, otherwise whichever has a row (to surface its status)
@@ -390,7 +429,7 @@ def main():
         read_vcf_ids(args.candidate_vcf) if present(args.candidate_vcf) else None,
         lifted,
         count_unmap_reasons(args.unmap) if present(args.unmap) else {},
-        ag_tables, am_hits, len(variants),
+        ag_tables, am_rows, len(variants),
     )
     with open(args.funnel_output, "w", newline="") as out:
         writer = csv.writer(out, delimiter="\t")

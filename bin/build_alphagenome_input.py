@@ -11,13 +11,24 @@ Symbolic-ALT structural variants (<DEL>, <INS>, ...) are excluded -- both
 CrossMap liftover and AlphaGenome's variant scoring expect explicit ref/alt
 sequence variants, not SV notation. Dropped count is logged, not silent.
 
-Common variants (gnomAD AF_nfe above -max_af) are also excluded -- they're
-implausible modifiers and dominate AlphaGenome run time. Variants with no
-gnomAD AF are always kept (absent from gnomAD is not evidence of common).
+Common variants are also excluded -- they're implausible modifiers and
+dominate AlphaGenome run time. Two frequencies are checked, gnomAD AF_nfe
+(gnomad_AF_NFE) and 1000 Genomes CHM13 EUR AF (kg_AF_EUR), and a variant
+is kept when EITHER annotated one is below -max_af -- so a variant missing
+from the Ensembl gnomAD projection (e.g. where CHM13 carries the minor
+allele) is still judged on 1000 Genomes. A variant with neither annotated is
+always kept (absent is not evidence of common).
 """
 import argparse
 import csv
 import sys
+
+
+def is_common(afs, max_af):
+    """True when >=1 AF is annotated and none of the annotated ones is below
+    max_af (the "rare in either source" rule; unannotated = no evidence)."""
+    known = [af for af in afs if af is not None]
+    return bool(known) and min(known) >= max_af
 
 
 def parse_af(value):
@@ -30,7 +41,7 @@ def parse_af(value):
 
 
 def read_modifier_tsv(path, model_name):
-    """Yields (chrom, pos, ref, alt, gene, reason, samples, af) per row,
+    """Yields (chrom, pos, ref, alt, gene, reason, samples, (gnomad_af, kg_af)) per row,
     skipping symbolic-ALT SV rows."""
     if not path:
         return
@@ -43,7 +54,7 @@ def read_modifier_tsv(path, model_name):
             yield (
                 row["#CHROM"], int(row["POS"]), row["REF"], alt,
                 row["gene"], row["reason"], row["samples"],
-                parse_af(row.get("gnomad_AF_NFE")),
+                (parse_af(row.get("gnomad_AF_NFE")), parse_af(row.get("kg_AF_EUR"))),
             )
 
 
@@ -54,8 +65,8 @@ def main():
     p.add_argument("-dominant_tsv", type=str, default=None,
                     help="cohort.dominant_modifier.tsv (optional)")
     p.add_argument("-max_af", type=float, default=None,
-                    help="Drop variants with gnomAD AF_nfe above this (unannotated AF is always kept). "
-                         "Unset = no AF filter")
+                    help="Keep a variant only if gnomAD AF_nfe or 1000 Genomes EUR AF is below this "
+                         "(variants with neither annotated are always kept). Unset = no AF filter")
     p.add_argument("-output", type=str, required=True, help="Output VCF path")
     args = p.parse_args()
 
@@ -69,9 +80,9 @@ def main():
     for path, model_name in ((args.recessive_tsv, "recessive"), (args.dominant_tsv, "dominant")):
         if not path:
             continue
-        for chrom, pos, ref, alt, gene, reason, samples, af in read_modifier_tsv(path, model_name):
+        for chrom, pos, ref, alt, gene, reason, samples, afs in read_modifier_tsv(path, model_name):
             key = (chrom, pos, ref, alt)
-            if args.max_af is not None and af is not None and af > args.max_af:
+            if args.max_af is not None and is_common(afs, args.max_af):
                 af_filtered.add(key)
                 continue
             entry = variants.setdefault(key, {"models": set(), "genes": set(), "reasons": set(), "samples": set()})
@@ -111,7 +122,8 @@ def main():
     sys.stderr.write(
         f"[build_alphagenome_input] {len(variants)} unique candidate variant(s) written to {args.output} "
         f"({n_sv_skipped} symbolic-ALT SV row(s) skipped -- not scored by this pass; "
-        f"{len(af_filtered)} unique variant(s) dropped with gnomAD AF_nfe > {args.max_af})\n"
+        f"{len(af_filtered)} unique variant(s) dropped as common: gnomAD AF_nfe and 1000 Genomes EUR AF "
+        f"both >= {args.max_af} where annotated)\n"
     )
 
 

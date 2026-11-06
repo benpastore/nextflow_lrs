@@ -19,6 +19,7 @@ process RECESSIVE_MODIFIER {
         path(family_json)
         path(vcf_manifest)
         path(vcfs)
+        path(kg_af_vcf, stageAs: 'kg_af/*')
         path(common_script)
         path(recessive_script)
         path(dominant_script)
@@ -30,6 +31,7 @@ process RECESSIVE_MODIFIER {
         path("*.dominant_modifier.gene_summary.tsv"), emit: dominant_modifier_gene_summary_ch
 
     script:
+    def kg_arg = kg_af_vcf.name != 'NO_FILE' ? "-kg_af_vcf ${kg_af_vcf}" : ''
     """
     #!/bin/bash
     set -euo pipefail
@@ -43,6 +45,7 @@ process RECESSIVE_MODIFIER {
         -vcf_manifest ${vcf_manifest} \\
         -sv_merge_dist ${params.recessive_modifier_sv_merge_dist ?: 500} \\
         ${params.gnomad_chm13_vcf ? "-gnomad_chm13_vcf ${params.gnomad_chm13_vcf}" : ""} \\
+        ${kg_arg} \\
         -output cohort.recessive_modifier.tsv
 
     python3 ${dominant_script} \\
@@ -50,6 +53,7 @@ process RECESSIVE_MODIFIER {
         -vcf_manifest ${vcf_manifest} \\
         -sv_merge_dist ${params.recessive_modifier_sv_merge_dist ?: 500} \\
         ${params.gnomad_chm13_vcf ? "-gnomad_chm13_vcf ${params.gnomad_chm13_vcf}" : ""} \\
+        ${kg_arg} \\
         -output cohort.dominant_modifier.tsv
     """
 }

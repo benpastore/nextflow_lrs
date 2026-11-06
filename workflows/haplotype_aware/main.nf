@@ -96,8 +96,17 @@ def helpMessage() {
     --genome_version [T2T|HG38]         Which assembly --genome actually is (default: "T2T"). Controls whether the alphagenome step lifts candidates to hg38 first (T2T) or skips liftover entirely (HG38, when --genome is already hg38)
     --chm13_to_hg38_chain [chain]       CHM13(hs1)->hg38 liftover chain file. Optional -- auto-fetched from UCSC if unset (fails loudly if your compute nodes lack internet access; fetch it once from a login node and set this instead if so)
     --alphagenome_quantile_threshold [float]  |quantile_score| cutoff for impacted_genes and large_impact_motor_neuron (default: 0.99)
-    --alphagenome_max_af [float]        Skip AlphaGenome for candidates with gnomAD AF_nfe above this; unannotated AF always kept (default: 0.40, "" = off)
-    --alphamissense_tsv [tsv.gz]        AlphaMissense_hg38.tsv.gz for missense pathogenicity in the final report (default: "" = skipped)
+    --alphagenome_max_af [float]        Send a candidate to AlphaGenome/AlphaMissense only if gnomAD AF_nfe OR 1000 Genomes EUR AF is below this;
+                                         candidates with neither annotated are always kept (default: 0.30, "" = off)
+    --kg_chm13_vcfs [glob]              Per-chromosome 1000 Genomes VCFs recalled on CHM13 (T2T consortium), for the kg_AF_EUR column. Built once
+                                         into a sites-only EUR AF file under --kg_af_dir (default: "" = skipped)
+    --kg_panel [txt]                    1KGP pedigree/population panel (SampleID/FatherID/MotherID/Superpopulation), to pick unrelated EUR samples
+    --kg_af_vcf [vcf.gz]                Prebuilt EUR sites VCF (INFO/AF); skips the build (default: "")
+    --kg_af_dir [dir]                   Where the built EUR sites VCF is cached (default: <results>/00_resources/1kg_chm13)
+    --alphamissense_tsv [tsv.gz]        AlphaMissense_hg38.tsv.gz (or AlphaMissense_isoforms_hg38.tsv.gz): turns on the AlphaMissense lookup for
+                                         coding missense candidates, published to 08_annotation/alphamissense (default: "" = skipped)
+    --alphamissense_gene_tsv [tsv.gz]   AlphaMissense_gene_hg38.tsv.gz, adds each transcript's mean pathogenicity (default: "" = skipped)
+    --alphamissense_index_dir [dir]     Where the one-time tabix-indexed copy of --alphamissense_tsv is cached (default: <results>/00_resources/alphamissense)
 
     Final report (<results>/09_variant_report/cohort.variant_report.tsv) is written whenever the modifier search runs --
     one row per candidate variant joining modifier info, mild/severe carriers, gnomAD AF, snpEff, AlphaMissense, AlphaGenome.
@@ -172,8 +181,10 @@ include { genome_stats } from '../../subworkflows/ont.nf'
 include { chrom_coverage } from '../../subworkflows/ont.nf'
 include { consolidate_variants } from '../../subworkflows/ont.nf'
 include { snpeff } from '../../subworkflows/ont.nf'
+include { kg_af } from '../../subworkflows/ont.nf'
 include { recessive_modifier } from '../../subworkflows/ont.nf'
 include { alphagenome } from '../../subworkflows/ont.nf'
+include { alphamissense } from '../../subworkflows/ont.nf'
 include { variant_report } from '../../subworkflows/ont.nf'
 
 include { herro_correction } from '../../subworkflows/herro.nf'
@@ -561,7 +572,16 @@ workflow {
                     .map { sampleID, vcf -> vcf }
                     .collect()
 
-                recessive_modifier( file(params.family_json), vcf_manifest_ch, vcfs_ch )
+                // 1000 Genomes CHM13 EUR allele frequencies (kg_AF_EUR column),
+                // alongside gnomAD -- built once from the per-chromosome 1KGP
+                // CHM13 VCFs, then reused (see modules/kg_af/main.nf)
+                kg_af_vcf_ch = Channel.value(file("NO_FILE"))
+                if (params.kg_af_vcf || params.kg_chm13_vcfs) {
+                    kg_af()
+                    kg_af_vcf_ch = kg_af.out.kg_af_ch
+                }
+
+                recessive_modifier( file(params.family_json), vcf_manifest_ch, vcfs_ch, kg_af_vcf_ch )
 
                 ////////////////// ALPHAGENOME VARIANT-EFFECT SCORING /////////////////////
                 // Scores the recessive_modifier/dominant_modifier PASS candidates (not
@@ -575,15 +595,15 @@ workflow {
                 // alphagenome workflow. params.chm13_to_hg38_chain is optional in T2T
                 // mode: if unset, the chain is fetched automatically
                 // (FETCH_CHM13_TO_HG38_CHAIN, modules/alphagenome/main.nf).
-                // Input prep + liftover also runs when only AlphaMissense is
-                // configured, since its lookup needs hg38 coordinates.
+                // AlphaMissense (below) needs the same hg38 reference but does
+                // its own liftover, so the two steps are independent.
                 hg38_vcf_ch = Channel.empty()
                 candidate_vcf_ch = Channel.empty()
                 unmap_ch = Channel.empty()
                 alphagenome_ch = Channel.empty()
                 alphagenome_api_ch = Channel.empty()
+                alphamissense_ch = Channel.empty()
                 if (params.run_alphagenome || params.run_alphagenome_api || params.alphamissense_tsv) {
-                    if (params.run_alphagenome && !params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
                     if (!(params.genome_version in ['T2T', 'HG38'])) {
                         exit 1, "params.genome_version must be 'T2T' or 'HG38' (got: ${params.genome_version})"
                     }
@@ -599,6 +619,10 @@ workflow {
                         INDEX_HG38_REFERENCE( file(params.hg38_genome, checkIfExists: true) )
                         hg38_fai_index = INDEX_HG38_REFERENCE.out.ref_indexed_ch
                     }
+                }
+
+                if (params.run_alphagenome || params.run_alphagenome_api) {
+                    if (params.run_alphagenome && !params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
 
                     alphagenome(
                         recessive_modifier.out.recessive_modifier_ch,
@@ -611,6 +635,21 @@ workflow {
                     unmap_ch = alphagenome.out.alphagenome_unmapped_ch
                     alphagenome_ch = alphagenome.out.alphagenome_ch
                     alphagenome_api_ch = alphagenome.out.alphagenome_api_ch
+                }
+
+                ////////////////// ALPHAMISSENSE MISSENSE PATHOGENICITY /////////////////////
+                // Precomputed AlphaMissense scores for every candidate SNV that is a
+                // missense change in an hg38 protein-coding transcript (see
+                // bin/run_alphamissense.py). Same candidates as AlphaGenome (same
+                // alphagenome_max_af gnomAD pre-filter), but runs independently of it.
+                if (params.alphamissense_tsv) {
+                    alphamissense(
+                        recessive_modifier.out.recessive_modifier_ch,
+                        recessive_modifier.out.dominant_modifier_ch,
+                        hg38_fai_index,
+                        skip_liftover
+                    )
+                    alphamissense_ch = alphamissense.out.alphamissense_ch
                 }
 
                 ////////////////// FINAL PER-VARIANT REPORT /////////////////////
@@ -627,7 +666,8 @@ workflow {
                     hg38_vcf_ch.ifEmpty(file("NO_FILE")),
                     unmap_ch.ifEmpty(file("NO_FILE")),
                     alphagenome_ch.ifEmpty(file("NO_FILE")),
-                    alphagenome_api_ch.ifEmpty(file("NO_FILE"))
+                    alphagenome_api_ch.ifEmpty(file("NO_FILE")),
+                    alphamissense_ch.ifEmpty(file("NO_FILE"))
                 )
             }
         }

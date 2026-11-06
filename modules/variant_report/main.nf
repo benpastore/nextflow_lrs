@@ -22,6 +22,7 @@ process VARIANT_REPORT {
         path(unmap, stageAs: 'unmap/*')
         path(alphagenome_tsv, stageAs: 'alphagenome_local/*')
         path(alphagenome_api_tsv, stageAs: 'alphagenome_api/*')
+        path(alphamissense_tsv, stageAs: 'alphamissense/*')
         path(common_script)
         path(script)
 
@@ -48,7 +49,7 @@ process VARIANT_REPORT {
         -unmap ${unmap} \\
         -alphagenome_tsv ${alphagenome_tsv} \\
         -alphagenome_api_tsv ${alphagenome_api_tsv} \\
-        ${params.alphamissense_tsv ? "-alphamissense_tsv ${params.alphamissense_tsv}" : ''} \\
+        -alphamissense_tsv ${alphamissense_tsv} \\
         -output cohort.variant_report.tsv \\
         -funnel_output cohort.variant_funnel.tsv
     """

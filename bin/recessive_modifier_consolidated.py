@@ -43,6 +43,7 @@ import pandas as pd
 
 from _modifier_common import (
     GnomadNFEAnnotator,
+    annotate_final_pass,
     build_severe_index,
     in_severe,
     load_family_groups,
@@ -167,7 +168,8 @@ def severe_qualifying_genes(severe_records_list, sv_merge_dist):
 
 
 @timing
-def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_annotator=None, min_occurrence=1):
+def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_annotator=None, min_occurrence=1,
+        kg_annotator=None):
     logger.info(f"\n{'='*60}")
     logger.info(f"Discordant mild/severe groups: {len(discordant_groups)}")
     logger.info(f"Concordant-severe background samples: {len(concordant_severe)}")
@@ -242,20 +244,13 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
         logger.warning("No variants passed filtering - returning empty results table")
         empty_variants = pd.DataFrame(columns=[
             "#CHROM", "POS", "ID", "REF", "ALT", "gene", "zygosity", "reason",
-            "evidence_caller", "callers_detected", "GT", "PS", "samples", "N_samples", "gnomad_AF_NFE"
+            "evidence_caller", "callers_detected", "GT", "PS", "samples", "N_samples", "gnomad_AF_NFE", "kg_AF_EUR"
         ])
         empty_genes = pd.DataFrame(columns=["gene", "N_sibs_with_variant", "N_homo_sibs", "N_compound_het_sibs", "samples"])
         return empty_variants, empty_genes
 
-    var_id_to_af = {}
-    if gnomad_annotator is not None:
-        logger.info("Annotating passing variants with gnomAD AF_nfe...")
-        gnomad_annotator.load()
-        batch = [(key, info["rec"]["chrom"], info["rec"]["pos"], info["rec"]["ref"], info["rec"]["alt"])
-                 for key, info in final_pass.items()]
-        results = gnomad_annotator.annotate_batch([(c, p, r, a) for _, c, p, r, a in batch])
-        for key, chrom, pos, ref, alt in batch:
-            var_id_to_af[key] = results.get(f"{chrom}:{pos}:{ref}>{alt}")
+    var_id_to_af = annotate_final_pass(final_pass, gnomad_annotator)
+    var_id_to_kg_af = annotate_final_pass(final_pass, kg_annotator)
 
     rows = []
     gene_homo_samples = defaultdict(set)
@@ -279,6 +274,7 @@ def run(discordant_groups, concordant_severe, manifest, sv_merge_dist, gnomad_an
             "samples": ",".join(sorted(info["samples"])),
             "N_samples": len(info["samples"]),
             "gnomad_AF_NFE": var_id_to_af.get(key),
+            "kg_AF_EUR": var_id_to_kg_af.get(key),
         })
         if info["reason"] == "homozygous":
             gene_homo_samples[gene].update(info["samples"])
@@ -332,6 +328,8 @@ def get_args():
                          help="Max bp between SV start positions (same chrom+SVTYPE) to treat as the same site across samples")
     parser.add_argument("-gnomad_chm13_vcf", type=str, default=None,
                          help="Optional gnomAD VCF already lifted onto CHM13 coordinates, for AF_nfe annotation of the final pass")
+    parser.add_argument("-kg_af_vcf", type=str, default=None,
+                         help="Optional 1000 Genomes CHM13 sites VCF with EUR INFO/AF (modules/kg_af/main.nf), for kg_AF_EUR annotation of the final pass")
     parser.add_argument("-output", type=str, default=None)
     parser.add_argument("-min_occurrence", type=int, default=1,
                          help="Minimum number of independent mild samples a gene must appear in to pass the multi-sample recurrence filter")
@@ -349,8 +347,12 @@ def main():
     gnomad_annotator = None
     if args.gnomad_chm13_vcf:
         gnomad_annotator = GnomadNFEAnnotator(args.gnomad_chm13_vcf)
+    kg_annotator = None
+    if args.kg_af_vcf:
+        kg_annotator = GnomadNFEAnnotator(args.kg_af_vcf, field="AF", label="1000 Genomes EUR")
 
-    res, gene_summary = run(discordant_groups, concordant_severe, manifest, args.sv_merge_dist, gnomad_annotator, args.min_occurrence)
+    res, gene_summary = run(discordant_groups, concordant_severe, manifest, args.sv_merge_dist, gnomad_annotator,
+                            args.min_occurrence, kg_annotator)
 
     output_file = args.output or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_recessive_modifier_consolidated.tsv"
     res.to_csv(output_file, index=False, sep="\t", header=True)
