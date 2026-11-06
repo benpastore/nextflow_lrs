@@ -274,18 +274,22 @@ class FeatureAnnotator(object):
 
 # ----------------------------------------------------------------- statistics
 
-def _comb(n, k):
-    return math.factorial(n) // (math.factorial(k) * math.factorial(n - k))
+def _log_comb(n, k):
+    return math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
 
 
 def sign_test_p(n_pos, n_neg):
-    """Two-sided exact binomial (p=0.5) test of n_pos vs n_neg; "" if both 0."""
+    """Two-sided exact binomial (p=0.5) test of n_pos vs n_neg; "" if both 0.
+    Summed in log space -- 2**n overflows a float once n > ~1000 (genome-wide
+    repeat event counts get there easily)."""
     n = n_pos + n_neg
     if n == 0:
         return ""
     k = min(n_pos, n_neg)
-    tail = sum(_comb(n, i) for i in range(k + 1)) / float(2 ** n)
-    return min(1.0, 2 * tail)
+    log_terms = [_log_comb(n, i) - n * math.log(2) for i in range(k + 1)]
+    top = max(log_terms)
+    log_tail = top + math.log(sum(math.exp(t - top) for t in log_terms))
+    return min(1.0, 2 * math.exp(log_tail))
 
 
 def mann_whitney_p(x, y):

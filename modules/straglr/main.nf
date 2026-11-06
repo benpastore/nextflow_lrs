@@ -55,5 +55,18 @@ PYEOF
         --max_num_clusters ${params.straglr_max_num_clusters ?: 2} \\
         --nprocs ${task.cpus} \\
         ${params.straglr_args ?: ''}
+
+    # sanity check: straglr's BED must start with its own "#chrom" header --
+    # a run once produced a BED whose header had a filename glued in front
+    # of it ("<prefix>.straglr.haplotagged.tsv#chrom..."); fail here, in the
+    # task that wrote it, rather than letting it reach downstream parsers
+    for f in \${name}.straglr.bed \${name}.straglr.tsv; do
+        ls -l --time-style=full-iso "\$f" >&2
+    done
+    first=\$(head -n 1 \${name}.straglr.bed)
+    if [[ "\$first" != "#chrom"* ]]; then
+        echo "[STRAGLR] \${name}.straglr.bed header is malformed: \${first:0:200}" >&2
+        exit 1
+    fi
     """
 }

@@ -4,11 +4,17 @@ Repeat-expansion comparison of mild vs severe siblings from each child's
 Straglr genotypes (modules/straglr -> *.straglr.bed: one row per locus,
 up to --max_num_clusters alleles with size / copy_number / support).
 
-Loci are matched across children by position (within -merge_dist bp) AND
-canonical motif (smallest rotation of the motif or its reverse complement,
-reduced to its primitive period -- so CAG, AGC, CTG and CAGCAG are one
-motif). Each child's value at a locus is its LONGEST allele, in repeat
-copies. A child with no Straglr call at a locus is taken as the reference
+Loci are matched across children by POSITION only (overlapping, or within
+-merge_dist bp). Straglr's motif is a per-sample consensus, and for long
+VNTR motifs two children at the same locus routinely get different motifs
+(even different lengths), so motif can't be part of the match. Motifs are
+canonicalised (smallest rotation of the motif or its reverse complement,
+reduced to its primitive period -- CAG, AGC, CTG, CAGCAG are one motif);
+the locus motif is the most common one among its calls, ALL_MOTIFS lists
+every one reported. Each child's value at a locus is its LONGEST allele's
+SIZE in bp, expressed in copies of the locus motif -- comparable across
+children, unlike each child's own Straglr copy_number (which is relative
+to that child's own motif). A child with no Straglr call at a locus is taken as the reference
 length by default (genome-wide Straglr only reports loci with an
 insertion; with a -loci catalog an absence means no coverage instead --
 pass -absent_as_missing then).
@@ -99,12 +105,13 @@ class Call(object):
     def __init__(self, chrom, start, end, motif, alleles):
         self.chrom, self.start, self.end, self.motif = chrom, start, end, motif
         self.period = max(1, len(motif))
-        self.alleles = sorted(alleles, key=lambda a: -a[1])  # (size, copies, support)
+        self.alleles = sorted(alleles, key=lambda a: -a[0])  # (size bp, copies, support)
         self.max_size, self.max_cn = self.alleles[0][0], self.alleles[0][1]
 
     @property
     def allele_str(self):
-        return "/".join(f"{a[1]:g}" for a in self.alleles)
+        """allele sizes in bp, longest first (motif-independent)"""
+        return "/".join(f"{a[0]:g}" for a in self.alleles)
 
 
 def parse_straglr_bed(path, exclude_chroms):
@@ -114,8 +121,11 @@ def parse_straglr_bed(path, exclude_chroms):
             line = line.rstrip("\n")
             if not line:
                 continue
-            if line.startswith("#"):
-                header = line.lstrip("#").split("\t")
+            # header -- also when something got glued in front of it (seen in
+            # the wild: a filename immediately followed by "#chrom\t...")
+            hash_i = line.find("#chrom")
+            if line.startswith("#") or hash_i > 0:
+                header = line[max(hash_i, 0):].lstrip("#").split("\t")
                 continue
             fields = line.split("\t")
             if header is None:
@@ -157,41 +167,57 @@ def parse_straglr_bed(path, exclude_chroms):
 
 
 class Locus(object):
-    __slots__ = ("lid", "chrom", "start", "end", "motif", "period", "ref_cn", "calls", "ann", "known")
+    """One cohort locus. Straglr's motif is a per-sample consensus -- for long
+    (VNTR) motifs two children at the same locus often get different motifs,
+    even different lengths -- so loci are merged on position only, the locus
+    motif is the most common one among its calls (ties: shortest), and every
+    value is the allele SIZE in bp expressed in copies of that one locus motif
+    (comparable across children, unlike each child's own copy_number)."""
+    __slots__ = ("lid", "chrom", "start", "end", "motif", "motifs", "period", "ref_len", "ref_cn",
+                 "calls", "ann", "known")
 
-    def __init__(self, chrom, motif, members):
-        self.chrom, self.motif = chrom, motif
-        self.period = max(1, len(motif))
+    def __init__(self, chrom, members):
+        self.chrom = chrom
+        counts = defaultdict(int)
+        for _, c in members:
+            counts[c.motif] += 1
+        self.motif = min(counts, key=lambda m: (-counts[m], len(m), m))
+        self.motifs = sorted(counts, key=lambda m: (-counts[m], len(m), m))
+        self.period = max(1, len(self.motif))
         self.start = min(c.start for _, c in members)
         self.end = max(c.end for _, c in members)
-        self.ref_cn = statistics.median([(c.end - c.start) / float(self.period) for _, c in members])
+        self.ref_len = statistics.median([c.end - c.start for _, c in members])
+        self.ref_cn = self.ref_len / float(self.period)
         self.calls = {}
         for sample, c in members:  # one call per sample: keep its longest
-            if sample not in self.calls or c.max_cn > self.calls[sample].max_cn:
+            if sample not in self.calls or c.max_size > self.calls[sample].max_size:
                 self.calls[sample] = c
-        self.lid = f"{chrom}:{self.start}-{self.end}:{motif}"
+        self.lid = f"{chrom}:{self.start}-{self.end}"
         self.ann, self.known = {}, ""
+
+    def copies(self, call):
+        return call.max_size / float(self.period)
 
 
 def build_loci(sample_calls, merge_dist):
-    by_key = defaultdict(list)
+    by_chrom = defaultdict(list)
     for sample, calls in sample_calls.items():
         for c in calls:
-            by_key[(c.chrom, c.motif)].append((sample, c))
+            by_chrom[c.chrom].append((sample, c))
     loci = []
-    for (chrom, motif), members in by_key.items():
-        members.sort(key=lambda sc: sc[1].start)
+    for chrom, members in by_chrom.items():
+        members.sort(key=lambda sc: (sc[1].start, sc[1].end))
         cluster, cluster_end = [], None
         for sc in members:
             if cluster and sc[1].start > cluster_end + merge_dist:
-                loci.append(Locus(chrom, motif, cluster))
+                loci.append(Locus(chrom, cluster))
                 cluster = []
             if not cluster:
                 cluster_end = sc[1].end
             cluster.append(sc)
             cluster_end = max(cluster_end, sc[1].end)
         if cluster:
-            loci.append(Locus(chrom, motif, cluster))
+            loci.append(Locus(chrom, cluster))
     loci.sort(key=lambda l: (l.chrom, l.start))
     return loci
 
@@ -267,7 +293,7 @@ def main():
     def value(l, s):
         c = l.calls.get(s)
         if c is not None:
-            return c.max_cn
+            return l.copies(c)
         return None if args.absent_as_missing else l.ref_cn
 
     def differs(a, b):
@@ -283,10 +309,12 @@ def main():
     # ---- cohort catalog
     with open(f"{prefix}.repeat_loci.tsv", "w", newline="") as out:
         w = csv.writer(out, delimiter="\t", lineterminator="\n")
-        w.writerow(["LOCUS_ID", "CHROM", "START", "END", "MOTIF", "PERIOD", "REF_COPIES"] + ann_cols
-                   + ["known_locus"] + [f"{s}:{phenotype[s]}" for s in samples])
+        w.writerow(["LOCUS_ID", "CHROM", "START", "END", "MOTIF", "PERIOD", "REF_LEN_BP", "REF_COPIES",
+                    "N_MOTIFS_REPORTED", "ALL_MOTIFS"] + ann_cols
+                   + ["known_locus"] + [f"{s}:{phenotype[s]}:allele_bp" for s in samples])
         for l in loci:
-            w.writerow([l.lid, l.chrom, l.start, l.end, l.motif, l.period, fmt(l.ref_cn, 3)]
+            w.writerow([l.lid, l.chrom, l.start, l.end, l.motif, l.period, fmt(float(l.ref_len), 4), fmt(l.ref_cn, 3),
+                        len(l.motifs), ";".join(l.motifs)]
                        + [l.ann[c] for c in ann_cols] + [l.known]
                        + [l.calls[s].allele_str if s in l.calls else "" for s in samples])
 
@@ -296,7 +324,7 @@ def main():
     with open(f"{prefix}.repeat_mild_vs_severe.tsv", "w", newline="") as out:
         w = csv.writer(out, delimiter="\t", lineterminator="\n")
         w.writerow(["MILD_SAMPLE", "SEVERE_SAMPLE", "LOCUS_ID", "CHROM", "START", "END", "MOTIF", "REF_COPIES",
-                    "MILD_ALLELES", "MILD_MAX_COPIES", "SEVERE_ALLELES", "SEVERE_MAX_COPIES",
+                    "MILD_ALLELES_BP", "MILD_MAX_COPIES", "SEVERE_ALLELES_BP", "SEVERE_MAX_COPIES",
                     "DELTA_COPIES", "DELTA_BP", "DIRECTION", "GROUP_DIRECTION", "MILD_EXPANDED", "SEVERE_EXPANDED"]
                    + ann_cols + ["known_locus"])
         for l in loci:

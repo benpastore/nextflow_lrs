@@ -264,8 +264,9 @@ then compares each mild child with its severe siblings (family.json grouping, as
 
 ### `REPEAT_COMPARE` — `modules/cnv_repeat_compare/main.nf`
 Cohort-wide, gated by `--family_json` + `--run_repeat_compare`. `bin/repeat_compare.py` merges every child's
-Straglr BED into cohort loci (position within `--repeat_merge_dist` + canonical motif), takes each child's longest
-allele in repeat copies, annotates each locus with its most direct gene feature (CDS > 5'UTR > 3'UTR > ncRNA exon >
+Straglr BED into cohort loci by position only (overlapping or within `--repeat_merge_dist`; Straglr's per-sample
+consensus motif varies between children for long VNTR motifs), takes each child's longest allele size in bp expressed
+in copies of the locus's most common motif, annotates each locus with its most direct gene feature (CDS > 5'UTR > 3'UTR > ncRNA exon >
 promoter > intron, else nearest gene) and optional `--repeat_known_loci_bed` names, then compares mild vs severe.
 - **in**: family.json, a `sampleID<TAB>bed` manifest + every `*.straglr.bed`, the GTF (or `NO_FILE`), known loci (or `NO_FILE`)
 - **out** (`10_cnv_repeat_compare/repeats`): `cohort.repeat_locus_summary.tsv` (within-family `n_mild_longer`/`n_mild_shorter`,
