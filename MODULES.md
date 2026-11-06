@@ -252,6 +252,28 @@ reads are what's actually informative about haplotype).
   joined with the final haplotagged bam
 - **out**: `tuple val(sampleID), path("*.spectre.haplotagged.bed.gz"), path("*.spectre.haplotagged.bed.gz.tbi")` → `spectre_haplotagged_ch`
 
+### `CNV_COMPARE` — `modules/cnv_repeat_compare/main.nf`
+Cohort-wide, gated by `--family_json` + `--run_cnv_compare`. `bin/cnv_compare.py` turns every child's
+Spectre VCF into a per-gene copy number (genes from `--cnv_repeat_gtf`, default `--snpeff_gtf`; no call = CN 2),
+then compares each mild child with its severe siblings (family.json grouping, as in the modifier search).
+- **in**: family.json, a `sampleID<TAB>vcf` manifest + every `*.spectre.vcf.gz`, the GTF
+- **out** (`10_cnv_repeat_compare/cnv`): `cohort.cnv_gene_summary.tsv` (per gene: `n_mild_higher` = mild children
+  with more copies than every severe sibling, `n_mild_lower`, per-pair counts, sign test, concordant-severe background
+  gains/losses), `cohort.cnv_mild_vs_severe.tsv` (one row per differing mild/severe pair x gene),
+  `cohort.cnv_gene_cn.tsv` (gene x child CN matrix)
+
+### `REPEAT_COMPARE` — `modules/cnv_repeat_compare/main.nf`
+Cohort-wide, gated by `--family_json` + `--run_repeat_compare`. `bin/repeat_compare.py` merges every child's
+Straglr BED into cohort loci (position within `--repeat_merge_dist` + canonical motif), takes each child's longest
+allele in repeat copies, annotates each locus with its most direct gene feature (CDS > 5'UTR > 3'UTR > ncRNA exon >
+promoter > intron, else nearest gene) and optional `--repeat_known_loci_bed` names, then compares mild vs severe.
+- **in**: family.json, a `sampleID<TAB>bed` manifest + every `*.straglr.bed`, the GTF (or `NO_FILE`), known loci (or `NO_FILE`)
+- **out** (`10_cnv_repeat_compare/repeats`): `cohort.repeat_locus_summary.tsv` (within-family `n_mild_longer`/`n_mild_shorter`,
+  `n_mild_specific_expanded` = mild children expanded where no severe sibling is, group medians, Mann-Whitney + BH q),
+  `cohort.repeat_gene_summary.tsv`, `cohort.repeat_pattern_summary.tsv` (mild-longer vs -shorter by feature class,
+  motif period, motif, known locus; per-child expansion burden mild vs siblings), `cohort.repeat_mild_vs_severe.tsv`,
+  `cohort.repeat_sample_burden.tsv`, `cohort.repeat_loci.tsv` (catalog with every child's alleles)
+
 ### `PARAPHASE` — `modules/paraphase/main.nf`
 Segmental-duplication region reconstruction (e.g. SMN1/SMN2) via `paraphase`, restricted to
 `--paraphase_genes` if set.

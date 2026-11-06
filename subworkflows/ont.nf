@@ -341,6 +341,61 @@ workflow haplotype_annotate_spectre {
         spectre_haplotagged_ch = INDEX_SPECTRE_HAPLOTAGGED_BED.out.spectre_haplotagged_ch
 }
 
+// Mild-vs-severe sibling comparison of Spectre CNVs and Straglr repeat
+// expansions (see modules/cnv_repeat_compare/main.nf).
+include { CNV_COMPARE; REPEAT_COMPARE } from '../modules/cnv_repeat_compare/main.nf'
+workflow cnv_compare {
+
+    take :
+        family_json   // path to family.json
+        spectre_vcf   // tuple val(sampleID), path(spectre.vcf.gz), path(.tbi)
+        gtf           // gene model on params.genome
+
+    main :
+        manifest_ch = spectre_vcf
+            .map { sampleID, vcf, tbi -> "${sampleID}\t${vcf.name}" }
+            .collectFile(name: 'spectre_manifest.tsv', newLine: true, sort: true)
+        vcfs_ch = spectre_vcf.map { sampleID, vcf, tbi -> vcf }.collect()
+
+        CNV_COMPARE(
+            family_json, manifest_ch, vcfs_ch, gtf,
+            file("${params.bin}/_modifier_common.py"),
+            file("${params.bin}/_cnv_repeat_common.py"),
+            file("${params.bin}/cnv_compare.py")
+        )
+
+    emit :
+        cnv_gene_summary_ch = CNV_COMPARE.out.gene_summary_ch
+        cnv_pairs_ch = CNV_COMPARE.out.pairs_ch
+}
+
+workflow repeat_compare {
+
+    take :
+        family_json      // path to family.json
+        straglr_calls    // tuple val(sampleID), path(straglr.tsv), path(straglr.bed)
+        gtf              // gene model on params.genome, or file("NO_FILE")
+        known_loci_bed   // known repeat loci BED, or file("NO_FILE")
+
+    main :
+        manifest_ch = straglr_calls
+            .map { sampleID, tsv, bed -> "${sampleID}\t${bed.name}" }
+            .collectFile(name: 'straglr_manifest.tsv', newLine: true, sort: true)
+        beds_ch = straglr_calls.map { sampleID, tsv, bed -> bed }.collect()
+
+        REPEAT_COMPARE(
+            family_json, manifest_ch, beds_ch, gtf, known_loci_bed,
+            file("${params.bin}/_modifier_common.py"),
+            file("${params.bin}/_cnv_repeat_common.py"),
+            file("${params.bin}/repeat_compare.py")
+        )
+
+    emit :
+        repeat_locus_summary_ch = REPEAT_COMPARE.out.locus_summary_ch
+        repeat_gene_summary_ch = REPEAT_COMPARE.out.gene_summary_ch
+        repeat_pattern_summary_ch = REPEAT_COMPARE.out.pattern_summary_ch
+}
+
 include { PARAPHASE } from '../modules/paraphase/main.nf'
 workflow paraphase {
 

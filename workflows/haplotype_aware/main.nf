@@ -113,6 +113,23 @@ def helpMessage() {
     Alongside it, cohort.variant_funnel.tsv counts the variants entering/leaving each step.
     --alphagenome_args [str]            Extra raw args appended to the alphagenome command line
 
+    Mild vs severe CNV / repeat-expansion comparison (requires --family_json; <results>/10_cnv_repeat_compare):
+    --run_cnv_compare [bool]            Spectre CNVs -> per-gene copy number, mild vs severe siblings; cnv_gene_summary.tsv counts how often
+                                         each gene has more copies in the mild child than every severe sibling (default: true)
+    --run_repeat_compare [bool]         Straglr expansions matched across children by position + canonical motif, annotated to gene features,
+                                         compared within families and summarised for cohort-wide mild patterns (default: true)
+    --cnv_repeat_gtf [gtf]              Gene model for both (default: "" = --snpeff_gtf)
+    --cnv_repeat_exclude_chroms [str]   Comma-separated chromosomes to ignore (default: "chrM")
+    --cnv_compare_min_size [int]        Ignore CNVs shorter than this (default: 0)
+    --cnv_min_gene_overlap [float]      Fraction of a gene a CNV must cover to change its CN (default: 0 = any overlap)
+    --cnv_include_noncoding [bool]      Also report non-protein-coding genes (default: false)
+    --repeat_merge_dist [int]           bp within which calls are the same locus (default: 50)
+    --repeat_min_copy_diff [float]      Min repeat-copy difference to call longer/shorter/expanded (default: 3)
+    --repeat_min_frac_diff [float]      ...and min fraction of the shorter allele (default: 0.1)
+    --repeat_promoter_bp [int]          bp upstream of a TSS counted as promoter (default: 2000)
+    --repeat_absent_as_missing [bool]   Treat no Straglr call as missing, not reference length -- use with --straglr_loci_bed (default: false)
+    --repeat_known_loci_bed [bed]       Known/pathogenic repeat loci (chrom start end name) to label (default: "")
+
     Misc:
     --run_read_length_plot [bool]       Publication-quality read-length histogram + N50 per sample, <results>/00_qc/read_length (default: true)
     --read_length_plot_args [str]       Extra args for bin/plot_read_length.py, e.g. "-width 3.5 -height 2.6 -font_size 8"
@@ -186,6 +203,8 @@ include { recessive_modifier } from '../../subworkflows/ont.nf'
 include { alphagenome } from '../../subworkflows/ont.nf'
 include { alphamissense } from '../../subworkflows/ont.nf'
 include { variant_report } from '../../subworkflows/ont.nf'
+include { cnv_compare } from '../../subworkflows/ont.nf'
+include { repeat_compare } from '../../subworkflows/ont.nf'
 
 include { herro_correction } from '../../subworkflows/herro.nf'
 include { trio_family } from '../../subworkflows/trio.nf'
@@ -506,6 +525,27 @@ workflow {
             .join( haplo_ch_v2 )
             .map { sampleID, bed_gz, bed_gz_tbi, bam, bai -> tuple(sampleID, bed_gz, bed_gz_tbi, bam, bai) }
         haplotype_annotate_spectre( spectre_haplotag_input_ch )
+
+        ////////////////// MILD vs SEVERE CNV / REPEAT-EXPANSION COMPARISON /////////////////////
+        // Cohort-wide, from family.json's mild/severe sibling groupings (same
+        // as the modifier search). Genes come from params.cnv_repeat_gtf
+        // (default params.snpeff_gtf). See bin/cnv_compare.py and
+        // bin/repeat_compare.py; results in <results>/10_cnv_repeat_compare.
+        if (params.family_json && (params.run_cnv_compare || params.run_repeat_compare)) {
+            def cmp_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
+            if (params.run_cnv_compare) {
+                if (!cmp_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_cnv_compare' }
+                cnv_compare( file(params.family_json), spectre.out.spectre_vcf_ch, file(cmp_gtf_path, checkIfExists: true) )
+            }
+            if (params.run_repeat_compare) {
+                repeat_compare(
+                    file(params.family_json),
+                    straglr.out.straglr,
+                    cmp_gtf_path ? file(cmp_gtf_path, checkIfExists: true) : file("NO_FILE"),
+                    params.repeat_known_loci_bed ? file(params.repeat_known_loci_bed, checkIfExists: true) : file("NO_FILE")
+                )
+            }
+        }
 
         // paraphase (SMA/SMN1-SMN2 region reconstruction from segmental duplications)
         paraphase( haplo_ch_v2, samtools_fai_index )
