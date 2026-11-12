@@ -69,8 +69,10 @@ process WHATSHAP_PHASE_TRIO {
     tag "${child}"
     publishDir "${params.results}/06_variants/whatshap_trio_phased", mode: params.publish_mode
 
-    // Additive, trio-aware refinement of the child's small-variant (SNV +
-    // indel) phasing, run alongside (not instead of) the longphase_sv path.
+    // Trio-aware re-phasing of the child's small variants (SNV + indel),
+    // starting from the longphase_sv VCF. With --run_trio_analysis this
+    // output REPLACES longphase_sv as the child's phased small-variant VCF
+    // for consolidation and the haplotype analysis (see main.nf stage 5).
     // Parents contribute genotype-only Mendelian constraints from their own
     // ONT Clair3 VCFs (subworkflows/trio.nf), merged with the child into one
     // multi-sample VCF -- no parental BAM is needed. Sniffles SVs are not
@@ -151,7 +153,11 @@ pysam.index('-@', '${task.cpus}', '${child}.rg.bam')
       \$reads_bam
 
     bcftools index -f -t ${child}.trio.family.whatshapphase.vcf.gz
-    bcftools view -s ${child} -Oz -o ${child}.trio.whatshapphase.vcf.gz ${child}.trio.family.whatshapphase.vcf.gz
+    # child-only, and only sites where the child carries ALT (the family VCF
+    # also holds parent-only sites) -- this is the child's phased
+    # small-variant VCF for consolidation + haplotype analysis downstream
+    bcftools view -s ${child} ${child}.trio.family.whatshapphase.vcf.gz \\
+        | bcftools view -i 'GT="alt"' -Oz -o ${child}.trio.whatshapphase.vcf.gz
     bcftools index -f -t ${child}.trio.whatshapphase.vcf.gz
     rm -f ${child}.rg.bam ${child}.rg.bam.bai
 

@@ -102,7 +102,7 @@ def parse_vcf(path, caller):
             f = line.rstrip("\n").split("\t")
             if len(f) < 8:
                 continue
-            chrom, pos, _vid, ref, alt, qual, filt, info = f[:8]
+            chrom, pos, vid, ref, alt, qual, filt, info = f[:8]
             fmt = f[8] if len(f) > 8 else ""
             sample = f[9] if len(f) > 9 else ""
             gt, ps = "", ""
@@ -132,6 +132,7 @@ def parse_vcf(path, caller):
                     {
                         "chrom": chrom,
                         "pos": int(pos),
+                        "vid": vid,
                         "ref": ref,
                         "alt": a,
                         "qual": qual,
@@ -144,6 +145,166 @@ def parse_vcf(path, caller):
                     }
                 )
     return records
+
+
+# ------------------------------------------------------------------ parent of origin
+#
+# Trio mode only (--father-vcf/--mother-vcf given). Every site gets
+# INFO/ORIGIN = paternal | maternal | both | unknown, i.e. which parental
+# haplotype the child's ALT is on, so the master VCF carries haplotype
+# identity for small variants and SVs in one comparable label (their PS
+# values are not comparable: small-variant blocks come from WhatsHap, SV
+# blocks from Sniffles on the round-1 longphase BAM).
+#   small variants, in order:
+#     homozygous                        -> both
+#     parents' genotypes decide it      -> mendelian     (father 0/0 + mother
+#                                          carries ALT -> maternal, etc.)
+#     child's phase block               -> phase_block   (block HP1 assigned to a
+#                                          parent by voting over that block's
+#                                          Mendelian-informative phased het SNVs)
+#   SVs: bin/sv_trio_origin.py's call, matched by Sniffles ID -> sv_trio_origin
+# A site absent from a parent's Clair3 VCF is taken as hom-ref (Clair3 writes
+# variant sites only). INFO/DE_NOVO: ALT in neither parent.
+
+def gt_class(gt):
+    """'ref' / 'het' / 'hom' / None (missing) for a single-ALT GT."""
+    alleles = [a for a in (gt or "").replace("|", "/").split("/") if a not in (".", "")]
+    if not alleles:
+        return None
+    nonref = [a for a in alleles if a != "0"]
+    if not nonref:
+        return "ref"
+    return "hom" if len(nonref) == len(alleles) else "het"
+
+
+def alt_origin(father, mother):
+    """Which parent transmitted a child-het ALT, from parental classes, or None."""
+    f_alt, m_alt = father in ("het", "hom"), mother in ("het", "hom")
+    if father == "ref" and m_alt:
+        return "maternal"
+    if mother == "ref" and f_alt:
+        return "paternal"
+    if father == "hom" and mother == "het":
+        return "paternal"
+    if mother == "hom" and father == "het":
+        return "maternal"
+    return None
+
+
+OTHER_PARENT = {"paternal": "maternal", "maternal": "paternal"}
+
+
+def read_parent_classes(path, wanted):
+    """{(chrom,pos,ref,alt): class} for wanted small-variant keys; multiallelic
+    records are split per ALT, same as parse_vcf."""
+    out = {}
+    with opener(path) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            f = line.rstrip("\n").split("\t", 10)
+            if len(f) < 10:
+                continue
+            alts = f[4].split(",")
+            gt = dict(zip(f[8].split(":"), f[9].split(":"))).get("GT", "")
+            for i, a in enumerate(alts, start=1):
+                key = (f[0], int(f[1]), f[3], a)
+                if key in wanted:
+                    out[key] = gt_class(remap_gt_for_allele(gt, i) if len(alts) > 1 else gt)
+    return out
+
+
+class ParentOrigin:
+    def __init__(self, small_records, father_vcf, mother_vcf, sv_origin_tsv,
+                 min_informative=3, min_agreement=0.8):
+        wanted = {(r["chrom"], r["pos"], r["ref"], r["alt"]) for r in small_records}
+        self.father = read_parent_classes(father_vcf, wanted)
+        self.mother = read_parent_classes(mother_vcf, wanted)
+
+        # phase block -> parent of HP1 (first allele of the phased GT)
+        votes = defaultdict(lambda: {"paternal": 0, "maternal": 0})
+        span = {}
+        for r in small_records:
+            if (len(r["ref"]) != 1 or len(r["alt"]) != 1 or r["gt"] not in ("0|1", "1|0")
+                    or r["ps"] in ("", ".")):
+                continue
+            o = self.mendelian(r)
+            if o is None:
+                continue
+            hp1 = o if r["gt"][0] == "1" else OTHER_PARENT[o]
+            bk = (r["chrom"], r["ps"])
+            votes[bk][hp1] += 1
+            lo, hi = span.get(bk, (r["pos"], r["pos"]))
+            span[bk] = (min(lo, r["pos"]), max(hi, r["pos"]))
+        self.block_hp1 = {}
+        self.block_rows = []
+        for bk, c in votes.items():
+            n = c["paternal"] + c["maternal"]
+            top = max(c, key=c.get)
+            agree = c[top] / float(n)
+            call = top if n >= min_informative and agree >= min_agreement else ""
+            if call:
+                self.block_hp1[bk] = call
+            self.block_rows.append((bk[0], bk[1], span[bk][0], span[bk][1], n,
+                                    c["paternal"], c["maternal"], f"{agree:.3f}", call))
+        self.block_rows.sort(key=lambda r: (r[0], r[2]))
+
+        # SV parent of origin, by Sniffles ID
+        self.sv = {}
+        if sv_origin_tsv and os.path.basename(sv_origin_tsv) != "NO_FILE" and os.path.exists(sv_origin_tsv):
+            with open(sv_origin_tsv) as fh:
+                header = fh.readline().rstrip("\n").split("\t")
+                for line in fh:
+                    row = dict(zip(header, line.rstrip("\n").split("\t")))
+                    self.sv[row["ID"]] = (row.get("origin", ""), row.get("transmission", ""))
+        sys.stderr.write(
+            f"[consolidate_variants] parent of origin: {len(self.block_hp1)}/{len(votes)} phase blocks "
+            f"assigned, {len(self.sv)} SV origin calls\n")
+
+    def parent_classes(self, r):
+        key = (r["chrom"], r["pos"], r["ref"], r["alt"])
+        return self.father.get(key, "ref"), self.mother.get(key, "ref")
+
+    def mendelian(self, r):
+        return alt_origin(*self.parent_classes(r))
+
+    def site(self, site, calls):
+        """(origin, source, de_novo) for one master-VCF site."""
+        if site["svtype"]:
+            m = calls.get("sniffles")
+            if m is None:
+                return "unknown", "", False
+            if gt_class(m["gt"]) == "hom":
+                return "both", "homozygous", False
+            origin, trans = self.sv.get(m["vid"], ("", ""))
+            de_novo = trans == "not_in_parents"
+            return (origin, "sv_trio_origin", de_novo) if origin else ("unknown", "", de_novo)
+
+        m = next((calls[c] for c in ("clair3_longphase", "clair3") if c in calls), None)
+        if m is None:
+            return "unknown", "", False
+        cls = gt_class(m["gt"])
+        if cls == "hom":
+            return "both", "homozygous", False
+        if cls != "het":
+            return "unknown", "", False
+        f, mo = self.parent_classes(m)
+        o = alt_origin(f, mo)
+        if o:
+            return o, "mendelian", False
+        de_novo = f == "ref" and mo == "ref"
+        if m["gt"] in ("0|1", "1|0") and m["ps"] not in ("", "."):
+            hp1 = self.block_hp1.get((m["chrom"], m["ps"]))
+            if hp1:
+                return (hp1 if m["gt"][0] == "1" else OTHER_PARENT[hp1]), "phase_block", de_novo
+        return "unknown", "", de_novo
+
+    def write_blocks(self, path, sample):
+        with open(path, "w") as out:
+            out.write("CHILD\tCHROM\tPS\tfirst_informative_pos\tlast_informative_pos\tn_informative\t"
+                      "n_hp1_paternal\tn_hp1_maternal\tagreement\tHP1_origin\n")
+            for row in self.block_rows:
+                out.write(sample + "\t" + "\t".join(str(x) for x in row) + "\n")
 
 
 def cluster_svs(sv_records, merge_dist):
@@ -270,7 +431,7 @@ def discover_samples(input_dir):
     return samples
 
 
-def write_master_vcf(output_path, sample, callers, caller_type, sites):
+def write_master_vcf(output_path, sample, callers, caller_type, sites, origin=None):
     out = opener(output_path, "wt") if output_path.endswith(".gz") else open(
         output_path, "wt"
     )
@@ -286,9 +447,14 @@ def write_master_vcf(output_path, sample, callers, caller_type, sites):
         out.write('##INFO=<ID=CALLERS,Number=.,Type=String,Description="Names of variant callers that detected this variant">\n')
         out.write('##INFO=<ID=NUM_ALIGNMENT_CALLERS,Number=1,Type=Integer,Description="Number of alignment-based callers that detected this variant">\n')
         out.write('##INFO=<ID=NUM_ASSEMBLY_CALLERS,Number=1,Type=Integer,Description="Number of assembly-based callers that detected this variant">\n')
+        if origin is not None:
+            out.write('##INFO=<ID=ORIGIN,Number=1,Type=String,Description="Parental haplotype carrying the ALT: paternal, maternal, both (homozygous) or unknown">\n')
+            out.write('##INFO=<ID=ORIGIN_SOURCE,Number=1,Type=String,Description="How ORIGIN was assigned: mendelian, phase_block, homozygous, sv_trio_origin">\n')
+            out.write('##INFO=<ID=DE_NOVO,Number=0,Type=Flag,Description="ALT absent from both parents">\n')
         out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype as reported by this caller (phased with | when the caller phased it)">\n')
         out.write('##FORMAT=<ID=PS,Number=1,Type=String,Description="Phase set ID as reported by this caller, if phased">\n')
         out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(callers) + "\n")
+        origin_counts = defaultdict(int)
 
         for i, site in enumerate(sites):
             calls = {}
@@ -315,6 +481,14 @@ def write_master_vcf(output_path, sample, callers, caller_type, sites):
                 info_fields.insert(0, f"SVTYPE={site['svtype']}")
                 if site["end"] is not None:
                     info_fields.insert(1, f"END={site['end']}")
+            if origin is not None:
+                o, src, de_novo = origin.site(site, calls)
+                info_fields.append(f"ORIGIN={o}")
+                if src:
+                    info_fields.append(f"ORIGIN_SOURCE={src}")
+                if de_novo:
+                    info_fields.append("DE_NOVO")
+                origin_counts[(o, src)] += 1
 
             row = [
                 site["chrom"],
@@ -341,6 +515,9 @@ def write_master_vcf(output_path, sample, callers, caller_type, sites):
         f"[consolidate_variants] {sample}: {len(sites)} sites from "
         f"{len(callers)} callers ({', '.join(callers)}) -> {output_path}\n"
     )
+    if origin is not None:
+        sys.stderr.write("[consolidate_variants] ORIGIN: " + ", ".join(
+            f"{o}{'/' + s if s else ''}={n}" for (o, s), n in sorted(origin_counts.items(), key=lambda kv: -kv[1])) + "\n")
 
 
 def run_explicit(args):
@@ -362,7 +539,16 @@ def run_explicit(args):
         all_records.extend(recs)
 
     sites = build_sites(all_records, args.sv_merge_dist)
-    write_master_vcf(args.output, args.sample, callers, caller_type, sites)
+
+    origin = None
+    if args.father_vcf and args.mother_vcf and "NO_FILE" not in (
+            os.path.basename(args.father_vcf), os.path.basename(args.mother_vcf)):
+        small = [r for r in all_records if r["caller"] in ("clair3_longphase", "clair3") and not r["svtype"]]
+        origin = ParentOrigin(small, args.father_vcf, args.mother_vcf, args.sv_origin)
+        if args.block_output:
+            origin.write_blocks(args.block_output, args.sample)
+
+    write_master_vcf(args.output, args.sample, callers, caller_type, sites, origin)
 
 
 def run_discovery(args):
@@ -422,6 +608,10 @@ def main():
         help="Max bp between SV start positions (same chrom+SVTYPE) to be "
         "merged into one site (default: 500)",
     )
+    p.add_argument("--father-vcf", help="Trio mode: father's Clair3 VCF -> INFO/ORIGIN on every site")
+    p.add_argument("--mother-vcf", help="Trio mode: mother's Clair3 VCF")
+    p.add_argument("--sv-origin", help="Trio mode: bin/sv_trio_origin.py output for this child (SV ORIGIN)")
+    p.add_argument("--block-output", help="Trio mode: write per-phase-block HP1 parent assignments here")
     args = p.parse_args()
 
     if args.caller:

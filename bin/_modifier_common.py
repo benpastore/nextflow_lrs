@@ -277,7 +277,8 @@ def parse_consolidated_vcf(path):
     Parse one sample's consolidated+snpEff VCF into {var_id: record}.
 
     record: chrom, pos, ref, alt, svtype, genes (set), caller (the one
-    whose GT/PS we're trusting), callers_all (list), gt, ps, zygosity.
+    whose GT/PS we're trusting), callers_all (list), gt, ps, zygosity,
+    origin / origin_source / de_novo (INFO/ORIGIN etc., trio mode).
     """
     results = {}
     caller_col_idx = {}
@@ -361,6 +362,11 @@ def parse_consolidated_vcf(path):
                 "gt": gt,
                 "ps": ps,
                 "zygosity": zygosity,
+                # trio mode only (consolidate_variants.py --father-vcf/--mother-vcf):
+                # parental haplotype carrying the ALT; "unknown" otherwise
+                "origin": get_info_field(info, "ORIGIN") or "unknown",
+                "origin_source": get_info_field(info, "ORIGIN_SOURCE") or "",
+                "de_novo": "DE_NOVO" in info.split(";"),
             }
             kept += 1
 

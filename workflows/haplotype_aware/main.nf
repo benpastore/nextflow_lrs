@@ -6,6 +6,25 @@
 ========================================================================================
 Ben Pastore
 pastore.28@osu.edu
+
+Flow (each stage is a numbered section in the workflow below):
+  1. reads        parse design / basecall pod5 -> dorado trim -> QC -> HERRO correction
+  2. family       split parents out (family.json); parents get alignment + Clair3 + Sniffles only
+  3. alignment    minimap2 -> Clair3 -> longphase -> Sniffles -> longphase (SNV+SV)
+  4. other calls  Straglr repeats, Spectre CNV, paraphase, methylation (optional)
+  5. trio phasing WhatsHap pedigree phasing -> the child's phased small-variant VCF
+                  (SVs: SV_TRIO_ORIGIN, since WhatsHap can't phase SVs)
+  6. annotate     consolidate (WhatsHap small variants + Sniffles SVs), every variant
+                  labelled with its parental haplotype (INFO/ORIGIN) -> snpEff
+  7. haplotypes   mild vs severe: which parental haplotypes each sib pair shares (IBD0/1/2)
+  8. models       recessive / dominant search on variants of non-shared haplotypes
+  9. report       AlphaGenome / AlphaMissense / variant report
+
+  With parents:
+    WHATSHAP_PHASE_TRIO --+
+                          +-> CONSOLIDATE (INFO/ORIGIN) -> SNPEFF -> SIB_HAPLOTYPE_SHARING
+    SV_TRIO_ORIGIN -------+                                       -> HAPLOTYPE_MODIFIER -> AG/AM
+  (assembly: off by default, --assemble_genome true; see subworkflows/assembly.nf)
 ----------------------------------------------------------------------------------------
 */
 
@@ -15,132 +34,51 @@ def helpMessage() {
                             haplotype_aware long-read sequencing pipeline
     ========================================================================================
     Usage:
-    The typical command for running the pipeline is as follows:
-
         nextflow main.nf -profile cluster --design design.csv --genome ref.fa --results results/
-
-    or, starting from raw pod5 instead of an already-basecalled bam/fastq:
-
         nextflow main.nf -profile cluster --pod5_design pod5_design.csv --genome ref.fa --results results/
 
     Mandatory arguments:
-    --results [dir]                     Path to results directory. All per-tool outputs are published under this.
-    --genome [file]                     Reference genome fasta (T2T-CHM13 by default -- see nextflow.config).
-    -profile [str]                      Configuration profile to use. Can use local / cluster.
-
-    One of the following two is required to specify sample input:
-    --design [file]                     Tab-separated file with columns SAMPLE, ONT, ONT_UNAL_BAM -- one row per
-                                         sample (already-basecalled fastq + unaligned bam). Multiple rows per
-                                         sample are merged (multi-lane/multi-run support).
-    --pod5_design [file]                Alternative entry point: comma-separated csv (header: sample,pod5) mapping
-                                         each sampleID to a directory of pod5 files. The pipeline basecalls with
-                                         dorado (see --dorado_basecall_model) instead of reading --design.
-                                         Mutually exclusive with --design -- if both are set, --pod5_design wins.
+    --results [dir]                     Results directory
+    --genome [file]                     Reference fasta (T2T-CHM13 by default -- see nextflow.config)
+    -profile [str]                      local / cluster
+    --design [file]                     Comma-separated: sample, ONT fastq, ONT unaligned bam (rows per sample are merged)
+      or --pod5_design [file]           Comma-separated: sample,pod5 directory -- basecalls with dorado (wins if both set)
 
     Basecalling / trimming:
-    --dorado_basecall_model [str]       dorado basecaller model string, used only with --pod5_design.
-                                         (default: 'sup,5mCG_5hmCG' -- the 5mCG_5hmCG tag enables methylation
-                                         calling; see the methylation section below)
-    --default_dorado_seq_kit [str]      Sequencing kit passed to dorado trim/basecaller (default: 'SQK-LSK114')
-    --dorado_trim [bool]                Run dorado trim before downstream processing (default: true)
-    --dorado [bool]                     Run dorado polish during assembly (default: true)
+    --dorado_basecall_model [str]       dorado model, pod5 entry only (default 'sup,5mCG_5hmCG')
+    --default_dorado_seq_kit [str]      Kit for dorado trim/basecaller (default 'SQK-LSK114')
 
-    Assembly / alignment:
-    --assemble_genome [bool]            Run the hifiasm assembly branch (dipcall/hapdiff/etc.) (default: true)
-    --alignment_based_variant_calling [bool]
-                                         Run the minimap2/clair3/longphase alignment branch (default: true)
+    Error correction (HERRO):
+    --herro_model [file]                HERRO R10.4.1 model weights
+    --herro_gpu_ids [str] / --herro_batch_size [int] / --herro_preprocess_parts [int]
 
-    Error correction (HERRO -- GPU deep-learning ONT self-correction, https://github.com/lbcb-sci/herro):
-    --herro_model [file]                Path to HERRO R10.4.1 model weights (download from Zenodo, see
-                                         params.herro_model in nextflow.config). Runs on every sample,
-                                         no per-sample gating (herro has no notion of matched Illumina data).
-    --herro_gpu_ids [str]                GPU device IDs passed to `herro inference -d` (default: '0')
-    --herro_batch_size [int]            `herro inference -b` (default: 64 -- 64 for 40GB VRAM, 128 for 80GB)
-    --herro_preprocess_parts [int]      Chunk count for herro's preprocess.sh, bounds memory on large read
-                                         sets (default: 4)
+    Families (required for the haplotype-aware modifier search):
+    --family_json [file]                {"child": {"father": "...", "mother": "...", "phenotype": "mild|severe"}}
+                                         Parents are ordinary rows in the same design file.
+    --run_trio_analysis [bool]          Use the parents (trio phasing, sibling haplotype sharing,
+                                         haplotype-aware modifier search) (default: false)
 
-    Trio / haplotype family structure (hifiasm trio-binned assembly + WhatsHap pedigree phasing):
-    --family_json [file]                JSON mapping each child sampleID to its parents:
-                                         {"child": {"father": "...", "mother": "..."}}. Parents need no
-                                         Illumina data -- they're identified purely by this file and must just be
-                                         ordinary rows in the same --design/--pod5_design as children. (default:
-                                         false, disabled)
-    --run_trio_analysis [bool]          Master on/off switch for all trio-specific behavior. Requires
-                                         --family_json to also be set. Leave false for singular-genome runs.
-                                         (default: false)
+    Sibling haplotype sharing (bin/sib_haplotype_sharing.py, <results>/07_haplotypes):
+    --hap_ibd_error_rate [float]        Genotype error rate in the sharing HMM (default 0.05)
+    --hap_ibd_switch_rate [float]       Per-bp switch probability (default 1e-8)
+    --hap_ibd_min_segment_sites [int]   Shorter segments are merged into neighbours (default 50)
+    --hap_exclude_chroms [str]          Not scanned (default 'chrX,chrY,chrM')
 
-    Paraphase (SMA/SMN1-SMN2 and other segmental-duplication region reconstruction):
-    --paraphase_genome_build [str]      Reference build passed to paraphase's --genome (default: 'chm13')
-    --paraphase_genes [str]             Comma-separated region names to restrict paraphase to (default: '',
-                                         all regions supported for the chosen build)
-    --paraphase_args [str]              Extra raw args appended to the paraphase command line
+    Optional branches:
+    --assemble_genome [bool]            hifiasm assembly -> dipcall/hapdiff (default: false)
+    --run_methylation [bool]            Raw-read alignment + modkit per haplotype (default: false)
+    --run_snpeff [bool]                 snpEff annotation; required for the modifier search (default: true)
+    --run_cnv_compare / --run_repeat_compare [bool]   mild vs severe Spectre / Straglr comparison
+    --run_alphagenome / --run_alphagenome_api [bool]  AlphaGenome scoring of modifier candidates
+    --alphamissense_tsv [tsv.gz]        AlphaMissense lookup for missense candidates
+    --run_read_length_plot [bool]       Read-length histogram + N50 per sample (default: true)
 
-    Methylation:
-    --run_methylation [bool]            Default: true. Set false if the input bam/fastq was basecalled
-                                         without mod-calling enabled (no MM/ML tags) -- otherwise this
-                                         spends compute producing empty output. Real MM/ML tags only survive
-                                         on the raw (pre-HERRO) reads, so those are aligned separately
-                                         (minimap2_methylation) and haplotagged with HP projected over from
-                                         the herro-corrected/phased bam (methylation_haplotag) before modkit
-                                         pileup, split by haplotype (HP tag), producing per-haplotype
-                                         bedMethyl under <results>/methylation/modkit.
-
-    AlphaGenome functional scoring of recessive_modifier/dominant_modifier PASS candidates
-    (motor-neuron-focused; requires --run_snpeff and --family_json):
-    --run_alphagenome [bool]            Local GPU inference (default: false)
-    --run_alphagenome_api [bool]        Backup: score via DeepMind's hosted API instead, published to 08_annotation/alphagenome_api (default: false).
-                                         Needs internet on compute nodes and `nextflow secrets set ALPHAGENOME_API_KEY <key>`. Can run alongside --run_alphagenome
-    --alphagenome_weights [dir]         Local Kaggle AlphaGenome weights dir. Required if --run_alphagenome is true
-    --alphagenome_resources [dir]       Pre-downloaded AlphaGenome annotation/calibration files (bin/download_alphagenome_resources.sh). "" = fetch from GCS at runtime
-    --hg38_genome [fasta]               hg38 reference FASTA (AlphaGenome's training build). Required if either AlphaGenome step is on AND --genome_version is "T2T"
-    --genome_version [T2T|HG38]         Which assembly --genome actually is (default: "T2T"). Controls whether the alphagenome step lifts candidates to hg38 first (T2T) or skips liftover entirely (HG38, when --genome is already hg38)
-    --chm13_to_hg38_chain [chain]       CHM13(hs1)->hg38 liftover chain file. Optional -- auto-fetched from UCSC if unset (fails loudly if your compute nodes lack internet access; fetch it once from a login node and set this instead if so)
-    --alphagenome_quantile_threshold [float]  |quantile_score| cutoff for impacted_genes and large_impact_motor_neuron (default: 0.99)
-    --alphagenome_max_af [float]        Send a candidate to AlphaGenome/AlphaMissense only if gnomAD AF_nfe OR 1000 Genomes EUR AF is below this;
-                                         candidates with neither annotated are always kept (default: 0.30, "" = off)
-    --kg_chm13_vcfs [glob]              Per-chromosome 1000 Genomes VCFs recalled on CHM13 (T2T consortium), for the kg_AF_EUR column. Built once
-                                         into a sites-only EUR AF file under --kg_af_dir (default: "" = skipped)
-    --kg_panel [txt]                    1KGP pedigree/population panel (SampleID/FatherID/MotherID/Superpopulation), to pick unrelated EUR samples
-    --kg_af_vcf [vcf.gz]                Prebuilt EUR sites VCF (INFO/AF); skips the build (default: "")
-    --kg_af_dir [dir]                   Where the built EUR sites VCF is cached (default: <results>/00_resources/1kg_chm13)
-    --alphamissense_tsv [tsv.gz]        AlphaMissense_hg38.tsv.gz (or AlphaMissense_isoforms_hg38.tsv.gz): turns on the AlphaMissense lookup for
-                                         coding missense candidates, published to 08_annotation/alphamissense (default: "" = skipped)
-    --alphamissense_gene_tsv [tsv.gz]   AlphaMissense_gene_hg38.tsv.gz, adds each transcript's mean pathogenicity (default: "" = skipped)
-    --alphamissense_index_dir [dir]     Where the one-time tabix-indexed copy of --alphamissense_tsv is cached (default: <results>/00_resources/alphamissense)
-
-    Final report (<results>/09_variant_report/cohort.variant_report.tsv) is written whenever the modifier search runs --
-    one row per candidate variant joining modifier info, mild/severe carriers, gnomAD AF, snpEff, AlphaMissense, AlphaGenome.
-    Alongside it, cohort.variant_funnel.tsv counts the variants entering/leaving each step.
-    --alphagenome_args [str]            Extra raw args appended to the alphagenome command line
-
-    Mild vs severe CNV / repeat-expansion comparison (requires --family_json; <results>/10_cnv_repeat_compare):
-    --run_cnv_compare [bool]            Spectre CNVs -> per-gene copy number, mild vs severe siblings; cnv_gene_summary.tsv counts how often
-                                         each gene has more copies in the mild child than every severe sibling (default: true)
-    --run_repeat_compare [bool]         Straglr expansions matched across children by position + canonical motif, annotated to gene features,
-                                         compared within families and summarised for cohort-wide mild patterns (default: true)
-    --cnv_repeat_gtf [gtf]              Gene model for both (default: "" = --snpeff_gtf)
-    --cnv_repeat_exclude_chroms [str]   Comma-separated chromosomes to ignore (default: "chrM")
-    --cnv_compare_min_size [int]        Ignore CNVs shorter than this (default: 0)
-    --cnv_min_gene_overlap [float]      Fraction of a gene a CNV must cover to change its CN (default: 0 = any overlap)
-    --cnv_include_noncoding [bool]      Also report non-protein-coding genes (default: false)
-    --repeat_merge_dist [int]           bp within which calls are the same locus (default: 50)
-    --repeat_min_copy_diff [float]      Min repeat-copy difference to call longer/shorter/expanded (default: 3)
-    --repeat_min_frac_diff [float]      ...and min fraction of the shorter allele (default: 0.1)
-    --repeat_promoter_bp [int]          bp upstream of a TSS counted as promoter (default: 2000)
-    --repeat_absent_as_missing [bool]   Treat no Straglr call as missing, not reference length -- use with --straglr_loci_bed (default: false)
-    --repeat_known_loci_bed [bed]       Known/pathogenic repeat loci (chrom start end name) to label (default: "")
-
-    Misc:
-    --run_read_length_plot [bool]       Publication-quality read-length histogram + N50 per sample, <results>/00_qc/read_length (default: true)
-    --read_length_plot_args [str]       Extra args for bin/plot_read_length.py, e.g. "-width 3.5 -height 2.6 -font_size 8"
-    --publish_mode [str]                Nextflow publishDir mode used by most processes (default: 'copy')
-    --outprefix [str]                   Output prefix (default: 'ONT_ANALYSIS' if unset)
-    --debug [bool]                      Verbose logging / channel .view() calls (default: true)
+    See nextflow.config for every remaining option (paraphase, AlphaGenome, 1000 Genomes AF,
+    CNV/repeat thresholds, ...).
     --help                              Show this message
     """.stripIndent()
 }
 
-// Show help message
 if (params.help) {
     helpMessage()
     exit 0
@@ -148,170 +86,70 @@ if (params.help) {
 
 params.bin = "${params.base}/../../bin"
 params.index = "${params.base}/index"
-/*
-////////////////////////////////////////////////////////////////////
-Enable dls2 language --> import modules
-////////////////////////////////////////////////////////////////////
-*/
+
 nextflow.enable.dsl=2
 
-/* include modules */
+/* modules */
 include { DESIGN_INPUT } from '../../modules/parse_design/main.nf'
+include { MERGE_INPUTS; SAMTOOLS_CONVERT_BAM_TO_FASTQ; INDEX_REFERENCE } from '../../modules/samtools/main.nf'
+include { DORADO_TRIM } from '../../modules/dorado/main.nf'
 include { NANOPLOT_RAW } from '../../modules/nanoplot/main.nf'
 include { READ_LENGTH_PLOT } from '../../modules/read_length_plot/main.nf'
-include { INDEX_REFERENCE } from '../../modules/samtools/main.nf'
-include { INDEX_REFERENCE as INDEX_HG38_REFERENCE } from '../../modules/samtools/main.nf'
-
-/* include workflows */
-///////////// ILLUMINA ////////////
-include { atria } from '../../subworkflows/illumina.nf'
-include { bwa_align } from '../../subworkflows/illumina.nf'
-include { filter_bam } from '../../subworkflows/illumina.nf'
-include { deepvariant } from '../../subworkflows/illumina.nf'
-
-/////////////// ONT //////////////////
-include { hifasim } from '../../subworkflows/ont.nf'
-include { hifasim_trio } from '../../subworkflows/ont.nf'
-include { gfatools } from '../../subworkflows/ont.nf'
-include { dorado } from '../../subworkflows/ont.nf'
-
-include { minimap2 } from '../../subworkflows/ont.nf'
-include { minimap2_methylation } from '../../subworkflows/ont.nf'
-include { minimap2_index } from '../../subworkflows/ont.nf'
-include { minimap2_map_asm_to_ref } from '../../subworkflows/ont.nf'
-
-include { longphase } from '../../subworkflows/ont.nf'
-include { longphase_sv } from '../../subworkflows/ont.nf'
-
-include { clair3 } from '../../subworkflows/ont.nf'
-include { sniffles } from '../../subworkflows/ont.nf'
-include { spectre } from '../../subworkflows/ont.nf'
-include { straglr } from '../../subworkflows/ont.nf'
-include { haplotype_annotate_straglr } from '../../subworkflows/ont.nf'
-include { haplotype_annotate_spectre } from '../../subworkflows/ont.nf'
-include { paraphase } from '../../subworkflows/ont.nf'
-include { methylation_haplotag } from '../../subworkflows/ont.nf'
-include { modkit } from '../../subworkflows/ont.nf'
-include { dipcall } from '../../subworkflows/ont.nf'
-include { hapdiff } from '../../subworkflows/ont.nf'
-include { genome_stats } from '../../subworkflows/ont.nf'
-include { chrom_coverage } from '../../subworkflows/ont.nf'
-include { consolidate_variants } from '../../subworkflows/ont.nf'
-include { snpeff } from '../../subworkflows/ont.nf'
-include { kg_af } from '../../subworkflows/ont.nf'
-include { recessive_modifier } from '../../subworkflows/ont.nf'
-include { alphagenome } from '../../subworkflows/ont.nf'
-include { alphamissense } from '../../subworkflows/ont.nf'
-include { variant_report } from '../../subworkflows/ont.nf'
-include { cnv_compare } from '../../subworkflows/ont.nf'
-include { repeat_compare } from '../../subworkflows/ont.nf'
-
-include { herro_correction } from '../../subworkflows/herro.nf'
-include { trio_family } from '../../subworkflows/trio.nf'
 include { WHATSHAP_PHASE_TRIO } from '../../modules/whatshap/main.nf'
 include { SV_TRIO_ORIGIN } from '../../modules/sv_trio_origin/main.nf'
-include { pod5_basecall } from '../../subworkflows/pod5.nf'
 
-// to add
-include { DORADO_TRIM } from '../../modules/dorado/main.nf'
-include { SAMTOOLS_CONVERT_BAM_TO_FASTQ } from '../../modules/samtools/main.nf'
-include { SAMTOOLS_FASTQ_TO_BAM } from '../../modules/samtools/main.nf'
-include { PORECHOP } from '../../modules/porechop/main.nf'
-include { MERGE_INPUTS } from '../../modules/samtools/main.nf'
+/* subworkflows */
+include { pod5_basecall } from '../../subworkflows/pod5.nf'
+include { herro_correction } from '../../subworkflows/herro.nf'
+include { trio_family } from '../../subworkflows/trio.nf'
+include { assembly } from '../../subworkflows/assembly.nf'
+include { minimap2_index; minimap2; minimap2_methylation; clair3; longphase; sniffles; longphase_sv;
+          straglr; haplotype_annotate_straglr; spectre; haplotype_annotate_spectre; cnv_compare;
+          repeat_compare; paraphase; methylation_haplotag; modkit; consolidate_variants; snpeff;
+          kg_af; recessive_modifier } from '../../subworkflows/ont.nf'
+include { haplotype_analysis } from '../../subworkflows/haplotypes.nf'
+include { candidate_annotation } from '../../subworkflows/annotation.nf'
 
 workflow parse_design {
-    take : 
+    take :
         data
 
-    main : 
+    main :
         DESIGN_INPUT( data )
 
-        ont = DESIGN_INPUT
-            .out
-            .fastq_ch
-            .splitCsv( header: ['sample', 'ont', 'unal_bam'], sep: ",", skip: 1)
-            .map{ row -> [ row.sample, file(row.ont), file(row.unal_bam) ] }
+        ont = DESIGN_INPUT.out.fastq_ch
+            .splitCsv( header: ['sample', 'ont', 'unal_bam'], sep: ",", skip: 1 )
+            .map { row -> [ row.sample, file(row.ont), file(row.unal_bam) ] }
             .groupTuple()
-        
-        ont.view()
 
         MERGE_INPUTS( ont )
-        
-        ont_ch = MERGE_INPUTS.out.merged_inputs_ch
 
-        /*
-        ont = DESIGN_INPUT
-            .out
-            .fastq_ch
-            .splitCsv( header: ['sample', 'ont', 'unal_bam', 'r1', 'r2'], sep: ",", skip: 1)
-            .map{ row -> [ row.sample, row.ont ] }
-        
-        ont_unal_bam = DESIGN_INPUT
-            .out
-            .fastq_ch
-            .splitCsv( header: ['sample', 'ont', 'unal_bam', 'r1', 'r2'], sep: ",", skip: 1)
-            .map{ row -> [ row.sample, row.unal_bam ] }
-
-        ont_illumina = DESIGN_INPUT
-            .out
-            .fastq_ch
-            .splitCsv( header: ['sample', 'ont', 'unal_bam', 'r1', 'r2'], sep: ",", skip: 1)
-            .map{ row -> [ row.sample, row.ont, row.r1, row.r2 ] }
-
-        illumina = DESIGN_INPUT
-            .out
-            .fastq_ch
-            .splitCsv( header: ['sample', 'ont', 'unal_bam', 'r1', 'r2'], sep: ",", skip: 1)
-            .map{ row -> [ row.sample, row.r1, row.r2 ] }
-
-        //replicates_ch = DESIGN_INPUT
-        //    .out
-        //    .condition_ch
-        //    .splitCsv(header:false, skip:1)
-        */
-        
-    emit : 
-        //ont = ont
-        //ont_illumina = ont_illumina
-        //illumina = illumina
-        ont = ont_ch
-        //replicates = replicates_ch
+    emit :
+        ont = MERGE_INPUTS.out.merged_inputs_ch
 }
 
 /*
 //////////////////////// MAIN WORKFLOW ////////////////////////
 */
 
-workflow { 
+workflow {
 
-    /*
-    To Do: 
-    - Dorado2 base calling with methylation detection
-    */
+    if (!params.pod5_design && !params.design) { exit 1, 'Neither --design nor --pod5_design specified!' }
+    if (!params.genome) { exit 1, 'Genome fasta not specified!' }
+    ch_genome = file(params.genome, checkIfExists: true)
 
-    /*
-    ////////////////////////////////////////////////////////////////////
-    Validate mandatory inputs (design, genome, junctions, results, outprefix)
-    ////////////////////////////////////////////////////////////////////
-    */
-    if (params.pod5_design) {
-        ch_pod5_design = file(params.pod5_design, checkIfExists: true)
-    } else if (params.design) {
-        ch_design = file(params.design, checkIfExists: true)
-    } else {
-        exit 1, 'Neither --design nor --pod5_design specified!'
+    run_trio = params.run_trio_analysis && params.family_json
+    if (params.run_trio_analysis && !params.family_json) {
+        log.warn "--run_trio_analysis is set but --family_json is not -- running without trio analysis"
     }
-    if (params.genome)    { ch_genome = file(params.genome, checkIfExists: true) } else { exit 1, 'Genome fasta not specified!' }
-    if (params.outprefix) { ; } else {'Outprefix not specified! Defaulting to ONT_ANALYSIS'; params.outprefix = 'ONT_ANALYSIS' }
 
-    // upstream of everything make sure minimap2 index is built for reference
-    minimap2_index( params.genome, params.index ) // THIS GENERATES THE MINIMAP2 ALIGNMENT INDEX
-    reference_index = minimap2_index.out.index // THIS GENERATES THE MINIMAP2 ALIGNMENT INDEX
+    // reference indexes: minimap2 .mmi (alignment) and samtools .fai
+    minimap2_index( params.genome, params.index )
+    reference_index = minimap2_index.out.index
+    INDEX_REFERENCE( params.genome )
+    samtools_fai_index = INDEX_REFERENCE.out.ref_indexed_ch
 
-    INDEX_REFERENCE( params.genome ) // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
-    samtools_fai_index = INDEX_REFERENCE.out.ref_indexed_ch // THIS IS THE SAMTOOLS INDEX .fai GENERATION NOT FOR ALIGNMENT
-
-    ////////////////// parse design (or basecall from pod5, if pod5_design is set)
+    ////////////////// 1. READS: input -> trim -> QC -> HERRO /////////////////////
     if (params.pod5_design) {
         pod5_basecall( params.pod5_design )
         ont_reads = pod5_basecall.out.ont
@@ -319,451 +157,194 @@ workflow {
         parse_design( params.design )
         ont_reads = parse_design.out.ont
     }
+    if (params.debug) { ont_reads.view() }
 
-    if (params.debug) { 
-        // for debugging view ont reads
-        ont_reads.view() 
-    }
-
-    // trimming upstream of assembly and alignment
-    println("Dorado trim sequencing kit set to ${params.default_dorado_seq_kit}")
     DORADO_TRIM( ont_reads )
-
-    println("Samtools convert to fastq")
     SAMTOOLS_CONVERT_BAM_TO_FASTQ( DORADO_TRIM.out.dorado_trim_output_ch )
+    ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq   // (sid, unal_bam, fastq)
 
-    //ont_unal_bam = DORADO_TRIM.out.dorado_trim_output_ch
-    ont_ch = SAMTOOLS_CONVERT_BAM_TO_FASTQ.out.samtool_convert_unalbam2fastq
-
-    /////////////////// prelim QC on nanopore reads (always on raw reads, before HERRO correction)
     NANOPLOT_RAW( ont_ch )
-
-    // publication-quality read-length histogram with N50 (same reads as
-    // NanoPlot). Leaf step -- nothing consumes its output, so it never
-    // invalidates anything else's cache.
     if (params.run_read_length_plot) {
         READ_LENGTH_PLOT( ont_ch, file("${params.bin}/plot_read_length.py") )
     }
 
-    ////////////////// METHYLATION (raw-read alignment) /////////////////////
-    // real MM/ML methylation tags only survive on the raw (pre-herro) reads
-    // (herro's own output carries none, see MINIMAP2_ALIGN's comment), so
-    // this is aligned separately from the herro-corrected reads used for
-    // assembly/variant calling below. Independent of herro, so it can run
-    // in parallel with it. Haplotagged and piped into modkit further down,
-    // once herro-corrected phasing (longphase_sv) is available.
-    // Set params.run_methylation = false to skip this entirely -- e.g. if
-    // the input bam/fastq was basecalled without mod-calling enabled, MM/ML
-    // tags don't exist and this would just spend compute on empty output.
+    // methylation needs the raw (pre-HERRO) reads -- HERRO drops the MM/ML tags
     if (params.run_methylation) {
         minimap2_methylation( reference_index, ont_ch.map { sid, unal_bam, fastq -> tuple(sid, fastq) } )
-        methylation_bam_ch = minimap2_methylation.out.bams
     }
 
-    ////////////////// GPU DEEP-LEARNING ERROR CORRECTION (HERRO) /////////////////////
-    // every sample gets herro-corrected (no per-sample gating -- herro is ONT-only
-    // self-correction, unlike the old Illumina-hybrid HERO tool). Feeds assembly and
-    // alignment below.
     herro_correction( ont_ch )
-    ont_ch_corrected = herro_correction.out.ont_ch
+    reads_ch = herro_correction.out.ont_ch
 
-    ////////////////// TRIO / HAPLOTYPE FAMILY STRUCTURE /////////////////////
-    // params.run_trio_analysis is the single on/off switch for all
-    // trio-specific behavior (hifiasm trio-binning + WhatsHap pedigree
-    // phasing below). Flip it off for singular-genome runs without having
-    // to also unset/remove family_json. When off (or family_json unset),
-    // trio_family is never called and every child just takes the regular
-    // non-trio assembly path below.
-    //
-    // Parents have no Illumina data -- they're just ordinary rows in the
-    // same ONT design.csv/pod5_design as children, identified purely via
-    // family_json. trio_family splits them out into non_parent_ont_ch so
-    // they never enter assembly/alignment/phasing/paraphase/modkit below as
-    // full samples; only ont_ch_corrected gets swapped, everything
-    // downstream of it is unchanged.
-    run_trio = params.run_trio_analysis && params.family_json
+    ////////////////// 2. FAMILY: split parents out /////////////////////
+    // Parents only get alignment + Clair3 + Sniffles (inside trio_family);
+    // everything below runs on children only.
     if (run_trio) {
-        // computed once, reused at both the assembly gate below and the
-        // phasing gate further down -- avoids re-parsing family_json or
-        // re-running yak/clair3 for the same parents twice
-        trio_family( params.family_json, ont_ch_corrected, reference_index, samtools_fai_index )
-        ont_ch_corrected = trio_family.out.non_parent_ont_ch
+        trio_family( params.family_json, reads_ch, reference_index, samtools_fai_index )
+        reads_ch = trio_family.out.non_parent_ont_ch
     }
 
-    ////////////////// ASSEMBLY SECTION /////////////////////
-    // default (no-assembly) placeholders so the variant consolidation join below
-    // always has a channel to join against, even when assembly is skipped
+    ////////////////// (optional) ASSEMBLY -- off by default /////////////////////
     dipcall_vcf_ch = Channel.empty()
     hapdiff_vcf_ch = Channel.empty()
-
     if (params.assemble_genome) {
-        //Hifasim: assemble ont reads
-        if (params.debug) { println("ASSEMBLE GENOME WITH HIFASIM") }
-
-        if (run_trio) {
-            // children with a fully-resolved trio (both parents' yak dbs
-            // available) get hifiasm trio-binning; everyone else gets the
-            // regular non-trio assembly. Merged back into one channel shaped
-            // like hifasim.out.hifasim_asm so nothing further downstream
-            // (gfatools/dorado/dipcall/hapdiff) needs to know which path a
-            // given sample took.
-            assembly_gate = ont_ch_corrected
-                .join( trio_family.out.trio_assembly, remainder: true )
-                .branch {
-                    has_trio: it[3] != null
-                    no_trio: true
-                }
-
-            // no_trio items come from a join(remainder: true) miss -- Nextflow
-            // pads the whole missing right-hand side with a single null, not
-            // one null per field, so these tuples are only 4 elements
-            // (sid, bam, fastq, null), not 5. Index rather than destructure.
-            hifasim( assembly_gate.no_trio.map { it -> tuple(it[0], it[1], it[2]) } )
-
-            hifasim_trio( assembly_gate.has_trio.map { sid, bam, fastq, pat_yak, mat_yak -> tuple(sid, bam, fastq, pat_yak, mat_yak) } )
-
-            hifasim_asm_ch = hifasim.out.hifasim_asm.mix( hifasim_trio.out.hifasim_trio_asm )
-        } else {
-            // singular-genome mode: no trio structure, everyone takes the
-            // regular non-trio assembly path
-            hifasim( ont_ch_corrected )
-            hifasim_asm_ch = hifasim.out.hifasim_asm
-        }
-
-        // use jasmine to combine variant calls from multiple callers
-        // use busco to assess quality of assembly
-
-        //convert hifasim to fasta
-        gfatools( hifasim_asm_ch )
-
-        // include dorado polish
-        if (params.dorado) {
-
-            dorado( gfatools.out.fasta_asm )
-            genome_asm_ch = dorado.out.dorado_output_ch
-
-        } else {
-            genome_asm_ch = gfatools.out.haplotype_asm
-                .map { sampleID, bam, reads, hap1, hap2 -> tuple(sampleID, reads, hap1, hap2) }
-        }
-
-        // aggregate read/base counts and assembled genome size for QC
-        genome_stats( genome_asm_ch )
-        
-        // map the assembly to the reference
-        minimap2_map_asm_to_ref( reference_index, genome_asm_ch)
-
-        // per-chromosome average coverage of the assembly-vs-reference alignment
-        chrom_coverage( minimap2_map_asm_to_ref.out.bams )
-
-        //run dip call & hapdiff
-        // index the reference genome quickly for dipcall 
-        dipcall( genome_asm_ch,  samtools_fai_index )
-        hapdiff( genome_asm_ch,  samtools_fai_index )
-
-        // assembly-based variant calls, for the master variant table below
-        dipcall_vcf_ch = dipcall.out.dipcall
-            .map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
-        hapdiff_vcf_ch = hapdiff.out.hapdiff_ch
-
-    }
-    ////////////////// VARIANT CALLING SECTION -- From alignment & haplotype phasing /////////////////////
-    params.alignment_based_variant_calling = true
-    if (params.alignment_based_variant_calling) { 
-
-        // MAP READS TO REFERENCE GENOME (herro-corrected, for variant calling --
-        // see minimap2_methylation above for the separate raw-read alignment)
-        minimap2(reference_index, ont_ch_corrected.map { sid, unal_bam, fastq -> tuple(sid, fastq) })
-        
-        // clair3 call variants 
-        clair3( samtools_fai_index, minimap2.out.bams )
-
-        variants_ch = clair3.out.clair3_ch
-
-        vcf_bam_ch = variants_ch
-            .join(minimap2.out.bams)
-            .map { sampleID, vcf, tbi, bam, bai ->
-                tuple(sampleID, vcf, tbi, bam, bai)
-            }
-
-        // phase using variants from clair3
-        longphase( samtools_fai_index, vcf_bam_ch )
-        haplo_ch = longphase.out.longphase_ch
-
-        // sniffles (SV calling)
-        sniffles( haplo_ch )
-
-        // re-phase with long phase including sv
-        // combine sniffles + clair3 -> do another long phase and pass that to stragglr and spectre
-        clair3_sniffles_bam_ch = clair3.out.clair3_ch
-            .join(sniffles.out.sniffles_ch)
-            .join(minimap2.out.bams)
-            .map { sampleID, clair3_vcf, clair3_tbi, sniffles_vcf, sniffles_tbi, bam, bai ->
-                tuple(sampleID, clair3_vcf, clair3_tbi, sniffles_vcf, sniffles_tbi, bam, bai)
-            }
-        
-        // longphase round2
-        longphase_sv( samtools_fai_index, clair3_sniffles_bam_ch )
-        haplo_ch_v2 = longphase_sv.out.longphase_sv_ch
-
-        // straggler (expansion repeats)
-        straglr( haplo_ch_v2, samtools_fai_index )
-
-        // straglr has no native haplotype-aware genotyping mode -- tag each
-        // call post-hoc from the HP:i:1/HP:i:2 reads already in haplo_ch_v2
-        // (see bin/annotate_haplotype.py)
-        straglr_haplotag_input_ch = straglr.out.straglr
-            .join( haplo_ch_v2 )
-            .map { sampleID, tsv, bed, bam, bai -> tuple(sampleID, tsv, bed, bam, bai) }
-        haplotype_annotate_straglr( straglr_haplotag_input_ch )
-
-        // spectre CNV
-        spectre( haplo_ch_v2, samtools_fai_index )
-
-        // same rationale as straglr above -- spectre also has no native
-        // haplotype-aware CNV calling mode
-        spectre_haplotag_input_ch = spectre.out.spectre_bed_ch
-            .join( haplo_ch_v2 )
-            .map { sampleID, bed_gz, bed_gz_tbi, bam, bai -> tuple(sampleID, bed_gz, bed_gz_tbi, bam, bai) }
-        haplotype_annotate_spectre( spectre_haplotag_input_ch )
-
-        ////////////////// MILD vs SEVERE CNV / REPEAT-EXPANSION COMPARISON /////////////////////
-        // Cohort-wide, from family.json's mild/severe sibling groupings (same
-        // as the modifier search). Genes come from params.cnv_repeat_gtf
-        // (default params.snpeff_gtf). See bin/cnv_compare.py and
-        // bin/repeat_compare.py; results in <results>/10_cnv_repeat_compare.
-        // per-pair outputs also feed the final report's sibling-pair gene
-        // summary (variant_report below); NO_FILE when the step is off
-        repeat_pairs_ch = Channel.value(file("NO_FILE"))
-        cnv_gene_cn_ch = Channel.value(file("NO_FILE"))
-        if (params.family_json && (params.run_cnv_compare || params.run_repeat_compare)) {
-            def cmp_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
-            if (params.run_cnv_compare) {
-                if (!cmp_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_cnv_compare' }
-                cnv_compare( file(params.family_json), spectre.out.spectre_vcf_ch, file(cmp_gtf_path, checkIfExists: true) )
-                cnv_gene_cn_ch = cnv_compare.out.cnv_gene_cn_ch
-            }
-            if (params.run_repeat_compare) {
-                repeat_compare(
-                    file(params.family_json),
-                    straglr.out.straglr,
-                    cmp_gtf_path ? file(cmp_gtf_path, checkIfExists: true) : file("NO_FILE"),
-                    params.repeat_known_loci_bed ? file(params.repeat_known_loci_bed, checkIfExists: true) : file("NO_FILE")
-                )
-                repeat_pairs_ch = repeat_compare.out.repeat_pairs_ch
-            }
-        }
-
-        // paraphase (SMA/SMN1-SMN2 region reconstruction from segmental duplications)
-        paraphase( haplo_ch_v2, samtools_fai_index )
-
-        // methylation pileup (5mCG/5hmCG) -- real MM/ML tags only exist on the raw-read
-        // alignment (methylation_bam_ch), haplotagged here with HP projected over from
-        // longphase_sv's herro-corrected phasing (see methylation_haplotag)
-        if (params.run_methylation) {
-            methylation_haplotag( haplo_ch_v2, methylation_bam_ch )
-            modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
-        }
-
-        ////////////////// CONSOLIDATE VARIANTS SECTION /////////////////////
-        // master per-sample VCF: alignment-based (clair3 small variants,
-        // phased+SV-aware via longphase_sv) + sniffles (SV) callers, joined
-        // with assembly-based (dipcall, hapdiff) callers when available.
-        // Each caller keeps its own (phase-aware) genotype column so
-        // haplotype info is preserved; INFO/CALLERS + INFO/NUM_CALLERS
-        // record which/how many callers detected each variant.
-        clair3_longphase_vcf_ch = longphase_sv.out.longphase_sv_vcf_ch
-            .map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
-
-        sniffles_vcf_ch = sniffles.out.sniffles_ch
-            .map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
-
-        consolidate_input_ch = clair3_longphase_vcf_ch
-            .join(sniffles_vcf_ch)
-            .join(dipcall_vcf_ch, remainder: true)
-            .join(hapdiff_vcf_ch, remainder: true)
-            .map { sampleID, longphase_vcf, sniffles_vcf, dipcall_vcf, hapdiff_vcf ->
-                tuple(
-                    sampleID,
-                    longphase_vcf,
-                    sniffles_vcf,
-                    dipcall_vcf ?: file("NO_FILE"),
-                    hapdiff_vcf ?: file("NO_FILE")
-                )
-            }
-
-        consolidate_variants( consolidate_input_ch )
-
-        ////////////////// SNPEFF VARIANT-EFFECT ANNOTATION /////////////////////
-        // annotates the consolidated per-sample master VCF (alignment- +
-        // assembly-based callers merged above) with predicted functional
-        // effects/impact per variant.
-        if (params.run_snpeff) {
-            if (!params.snpeff_db) { exit 1, 'params.snpeff_db not set!' }
-            if (!params.snpeff_data_dir) { exit 1, 'params.snpeff_data_dir not set!' }
-
-            snpeff( consolidate_variants.out.consolidated_ch, ch_genome, params.snpeff_gtf ? file(params.snpeff_gtf, checkIfExists: true) : file("NO_FILE") )
-
-            ////////////////// RECESSIVE-MODIFIER CANDIDATE SEARCH /////////////////////
-            // Cohort-wide (not per-sample) -- mild/severe sibling groupings are
-            // derived from family.json's "phenotype" field (a field run_trio's
-            // own family.json use above doesn't touch), and compound-het
-            // candidates are confirmed in trans via each variant's own calling
-            // caller's phase evidence. See bin/recessive_modifier_consolidated.py.
-            if (params.family_json) {
-                vcf_manifest_ch = snpeff.out.snpeff_vcf_ch
-                    .map { sampleID, vcf -> "${sampleID}\t${vcf.name}" }
-                    .collectFile(name: 'vcf_manifest.tsv', newLine: true, sort: true)
-
-                vcfs_ch = snpeff.out.snpeff_vcf_ch
-                    .map { sampleID, vcf -> vcf }
-                    .collect()
-
-                // 1000 Genomes CHM13 EUR allele frequencies (kg_AF_EUR column),
-                // alongside gnomAD -- built once from the per-chromosome 1KGP
-                // CHM13 VCFs, then reused (see modules/kg_af/main.nf)
-                kg_af_vcf_ch = Channel.value(file("NO_FILE"))
-                if (params.kg_af_vcf || params.kg_chm13_vcfs) {
-                    kg_af()
-                    kg_af_vcf_ch = kg_af.out.kg_af_ch
-                }
-
-                recessive_modifier( file(params.family_json), vcf_manifest_ch, vcfs_ch, kg_af_vcf_ch )
-
-                ////////////////// ALPHAGENOME VARIANT-EFFECT SCORING /////////////////////
-                // Scores the recessive_modifier/dominant_modifier PASS candidates (not
-                // the raw consolidated VCF) for predicted large regulatory impact
-                // (expression/splicing) in motor-neuron-relevant tissue. AlphaGenome is
-                // trained on hg38 -- params.genome_version tells this step whether the
-                // pipeline's own params.genome (candidates are already called against
-                // it) is CHM13/T2T (needs liftover, the default) or already hg38 (skip
-                // liftover entirely -- lifting already-hg38 coordinates with a
-                // CHM13->hg38 chain would be wrong). See subworkflows/ont.nf's
-                // alphagenome workflow. params.chm13_to_hg38_chain is optional in T2T
-                // mode: if unset, the chain is fetched automatically
-                // (FETCH_CHM13_TO_HG38_CHAIN, modules/alphagenome/main.nf).
-                // AlphaMissense (below) needs the same hg38 reference but does
-                // its own liftover, so the two steps are independent.
-                hg38_vcf_ch = Channel.empty()
-                candidate_vcf_ch = Channel.empty()
-                unmap_ch = Channel.empty()
-                alphagenome_ch = Channel.empty()
-                alphagenome_api_ch = Channel.empty()
-                alphagenome_gene_ch = Channel.empty()
-                alphagenome_api_gene_ch = Channel.empty()
-                alphamissense_ch = Channel.empty()
-                if (params.run_alphagenome || params.run_alphagenome_api || params.alphamissense_tsv) {
-                    if (!(params.genome_version in ['T2T', 'HG38'])) {
-                        exit 1, "params.genome_version must be 'T2T' or 'HG38' (got: ${params.genome_version})"
-                    }
-
-                    skip_liftover = (params.genome_version == 'HG38')
-
-                    if (skip_liftover) {
-                        // params.genome IS hg38 already -- reuse its existing index
-                        // instead of requiring/indexing a separate hg38_genome resource
-                        hg38_fai_index = samtools_fai_index
-                    } else {
-                        if (!params.hg38_genome) { exit 1, 'params.hg38_genome not set! (required when params.genome_version is "T2T")' }
-                        INDEX_HG38_REFERENCE( file(params.hg38_genome, checkIfExists: true) )
-                        hg38_fai_index = INDEX_HG38_REFERENCE.out.ref_indexed_ch
-                    }
-                }
-
-                if (params.run_alphagenome || params.run_alphagenome_api) {
-                    if (params.run_alphagenome && !params.alphagenome_weights) { exit 1, 'params.alphagenome_weights not set!' }
-
-                    alphagenome(
-                        recessive_modifier.out.recessive_modifier_ch,
-                        recessive_modifier.out.dominant_modifier_ch,
-                        hg38_fai_index,
-                        skip_liftover
-                    )
-                    hg38_vcf_ch = alphagenome.out.hg38_vcf_ch
-                    candidate_vcf_ch = alphagenome.out.candidate_vcf_ch
-                    unmap_ch = alphagenome.out.alphagenome_unmapped_ch
-                    alphagenome_ch = alphagenome.out.alphagenome_ch
-                    alphagenome_api_ch = alphagenome.out.alphagenome_api_ch
-                    alphagenome_gene_ch = alphagenome.out.alphagenome_gene_ch
-                    alphagenome_api_gene_ch = alphagenome.out.alphagenome_api_gene_ch
-                }
-
-                ////////////////// ALPHAMISSENSE MISSENSE PATHOGENICITY /////////////////////
-                // Precomputed AlphaMissense scores for every candidate SNV that is a
-                // missense change in an hg38 protein-coding transcript (see
-                // bin/run_alphamissense.py). Same candidates as AlphaGenome (same
-                // alphagenome_max_af gnomAD pre-filter), but runs independently of it.
-                if (params.alphamissense_tsv) {
-                    alphamissense(
-                        recessive_modifier.out.recessive_modifier_ch,
-                        recessive_modifier.out.dominant_modifier_ch,
-                        hg38_fai_index,
-                        skip_liftover
-                    )
-                    alphamissense_ch = alphamissense.out.alphamissense_ch
-                }
-
-                ////////////////// FINAL PER-VARIANT REPORT /////////////////////
-                // One row per modifier PASS candidate: modifier info, mild/severe
-                // carriers, gnomAD AF, snpEff, AlphaMissense, AlphaGenome (every
-                // tissue x scorer). Whatever wasn't run is left as empty columns.
-                variant_report(
-                    recessive_modifier.out.recessive_modifier_ch,
-                    recessive_modifier.out.dominant_modifier_ch,
-                    file(params.family_json),
-                    vcf_manifest_ch,
-                    vcfs_ch,
-                    candidate_vcf_ch.ifEmpty(file("NO_FILE")),
-                    hg38_vcf_ch.ifEmpty(file("NO_FILE")),
-                    unmap_ch.ifEmpty(file("NO_FILE")),
-                    alphagenome_ch.ifEmpty(file("NO_FILE")),
-                    alphagenome_api_ch.ifEmpty(file("NO_FILE")),
-                    alphamissense_ch.ifEmpty(file("NO_FILE")),
-                    repeat_pairs_ch,
-                    cnv_gene_cn_ch,
-                    alphagenome_gene_ch.ifEmpty(file("NO_FILE")),
-                    alphagenome_api_gene_ch.ifEmpty(file("NO_FILE"))
-                )
-            }
-        }
-
-        ////////////////// TRIO-AWARE PEDIGREE PHASING (children only) /////////////////////
-        // Runs after variant consolidation (children-only step; parents never
-        // appear in longphase_sv/haplo_ch_v2 at all, since they're never run
-        // as full samples -- see trio_family). Additive refinement of the
-        // child's longphase_sv-phased small variants using Mendelian
-        // constraints from both parents' genotype VCFs (WhatsHap --ped).
-        // Phases the same clair3/longphase small-variant VCF consolidate_variants
-        // consumed above, not the master.vcf itself -- that file's sample
-        // columns are caller names, not sample IDs, and it mixes in symbolic
-        // SV records neither of which WhatsHap can phase. This step doesn't
-        // feed back into consolidate_variants/longphase_sv/straglr/spectre --
-        // it's purely an extra, separately-published output.
-        if (run_trio) {
-            trio_phasing_input = longphase_sv.out.longphase_sv_vcf_ch
-                .join( haplo_ch_v2 )
-                .join( trio_family.out.trio_phasing )
-                .map { sampleID, vcf, tbi, bam, bai, father, mother, father_vcf, mother_vcf ->
-                    tuple(sampleID, father, mother, vcf, bam, bai, father_vcf, mother_vcf)
-                }
-
-            WHATSHAP_PHASE_TRIO( samtools_fai_index, trio_phasing_input )
-
-            // SV parent of origin: child Sniffles calls vs the parents' own
-            // Sniffles calls (transmission) + the SV's longphase haplotype
-            // mapped to a parent via the child's phased SNVs (haplotype).
-            // Sniffles ran on LONGPHASE round 1's haplotagged BAM (haplo_ch),
-            // so its phase blocks match round 1's VCF, not longphase_sv's.
-            sv_trio_input = sniffles.out.sniffles_ch
-                .map { sampleID, vcf, tbi -> tuple(sampleID, vcf) }
-                .join( longphase.out.longphase_vcf_ch.map { sampleID, vcf, tbi -> tuple(sampleID, vcf) } )
-                .join( trio_family.out.trio_sv )
-                .map { sampleID, child_sv, child_snv, father, mother, father_snv, mother_snv, father_sv, mother_sv ->
-                    tuple(sampleID, child_sv, child_snv, father, mother, father_snv, mother_snv, father_sv, mother_sv)
-                }
-            SV_TRIO_ORIGIN( sv_trio_input, file("${params.bin}/sv_trio_origin.py") )
-        }
-
+        assembly( reads_ch, run_trio ? trio_family.out.trio_assembly : Channel.empty(),
+                  reference_index, samtools_fai_index )
+        dipcall_vcf_ch = assembly.out.dipcall_vcf
+        hapdiff_vcf_ch = assembly.out.hapdiff_vcf
     }
 
+    ////////////////// 3. ALIGNMENT, VARIANT CALLING, PHASING /////////////////////
+    minimap2( reference_index, reads_ch.map { sid, unal_bam, fastq -> tuple(sid, fastq) } )
+    clair3( samtools_fai_index, minimap2.out.bams )
+
+    // round 1: phase SNVs/indels, haplotag -> Sniffles (phased SVs)
+    longphase( samtools_fai_index, clair3.out.clair3_ch.join( minimap2.out.bams ) )
+    sniffles( longphase.out.longphase_ch )
+
+    // round 2: re-phase SNVs + SVs together; this BAM/VCF feeds everything below
+    longphase_sv( samtools_fai_index,
+                  clair3.out.clair3_ch.join( sniffles.out.sniffles_ch ).join( minimap2.out.bams ) )
+    phased_bam_ch = longphase_sv.out.longphase_sv_ch          // (sid, bam, bai)
+    phased_vcf_ch = longphase_sv.out.longphase_sv_vcf_ch      // (sid, vcf, tbi)
+
+    ////////////////// 4. REPEATS, CNV, PARAPHASE, METHYLATION /////////////////////
+    straglr( phased_bam_ch, samtools_fai_index )
+    haplotype_annotate_straglr( straglr.out.straglr.join( phased_bam_ch ) )
+
+    spectre( phased_bam_ch, samtools_fai_index )
+    haplotype_annotate_spectre( spectre.out.spectre_bed_ch.join( phased_bam_ch ) )
+
+    paraphase( phased_bam_ch, samtools_fai_index )
+
+    if (params.run_methylation) {
+        methylation_haplotag( phased_bam_ch, minimap2_methylation.out.bams )
+        modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
+    }
+
+    // mild vs severe CNV / repeat comparison (<results>/10_cnv_repeat_compare);
+    // per-pair outputs also feed the final report
+    repeat_pairs_ch = Channel.value(file("NO_FILE"))
+    cnv_gene_cn_ch = Channel.value(file("NO_FILE"))
+    if (params.family_json && (params.run_cnv_compare || params.run_repeat_compare)) {
+        def cmp_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
+        if (params.run_cnv_compare) {
+            if (!cmp_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_cnv_compare' }
+            cnv_compare( file(params.family_json), spectre.out.spectre_vcf_ch, file(cmp_gtf_path, checkIfExists: true) )
+            cnv_gene_cn_ch = cnv_compare.out.cnv_gene_cn_ch
+        }
+        if (params.run_repeat_compare) {
+            repeat_compare(
+                file(params.family_json),
+                straglr.out.straglr,
+                cmp_gtf_path ? file(cmp_gtf_path, checkIfExists: true) : file("NO_FILE"),
+                params.repeat_known_loci_bed ? file(params.repeat_known_loci_bed, checkIfExists: true) : file("NO_FILE")
+            )
+            repeat_pairs_ch = repeat_compare.out.repeat_pairs_ch
+        }
+    }
+
+    ////////////////// 5. TRIO PHASING + SV PARENT OF ORIGIN /////////////////////
+    // small_vcf_ch = the child's phased small-variant VCF used by everything
+    // below: WhatsHap pedigree phasing when parents are available, otherwise
+    // longphase_sv as-is.
+    small_vcf_ch = phased_vcf_ch
+    sv_origin_ch = Channel.empty()        // (child, sv_trio_origin.tsv)
+    parent_pair_ch = Channel.empty()      // (child, [father_vcf, mother_vcf])
+    if (run_trio) {
+        parent_pair_ch = trio_family.out.trio_phasing
+            .map { child, father, mother, father_vcf, mother_vcf -> tuple(child, [father_vcf, mother_vcf]) }
+
+        WHATSHAP_PHASE_TRIO( samtools_fai_index,
+            phased_vcf_ch.join( phased_bam_ch ).join( trio_family.out.trio_phasing )
+                .map { sid, vcf, tbi, bam, bai, father, mother, father_vcf, mother_vcf ->
+                    tuple(sid, father, mother, vcf, bam, bai, father_vcf, mother_vcf) } )
+        small_vcf_ch = WHATSHAP_PHASE_TRIO.out.whatshap_phase_trio_ch      // (child, vcf, tbi)
+
+        // SVs: WhatsHap can't phase them, so their parent of origin comes from
+        // Sniffles' own phase tags (assigned on the round-1 longphase BAM, hence
+        // round-1's phase blocks) + whether each parent carries the SV.
+        // Written into the master VCF's INFO/ORIGIN at consolidation.
+        SV_TRIO_ORIGIN(
+            sniffles.out.sniffles_ch.map { sid, vcf, tbi -> tuple(sid, vcf) }
+                .join( longphase.out.longphase_vcf_ch.map { sid, vcf, tbi -> tuple(sid, vcf) } )
+                .join( trio_family.out.trio_sv ),
+            file("${params.bin}/sv_trio_origin.py") )
+        sv_origin_ch = SV_TRIO_ORIGIN.out.sv_trio_origin_ch.map { sid, tsv, blocks -> tuple(sid, tsv) }
+    }
+
+    ////////////////// 6. CONSOLIDATE CALLERS + SNPEFF /////////////////////
+    // one master VCF per child: phased small variants (WhatsHap trio, or
+    // longphase_sv without parents -- either way in the "clair3_longphase"
+    // column) + sniffles (+ dipcall/hapdiff when assembly is on), each
+    // caller's GT:PS kept in its own column. With parents, every site also
+    // gets INFO/ORIGIN (paternal / maternal / both / unknown): small variants
+    // from the parents' genotypes + the child's WhatsHap phase blocks, SVs
+    // from SV_TRIO_ORIGIN.
+    no_file = file("NO_FILE")
+    consolidate_variants(
+        small_vcf_ch.map { sid, vcf, tbi -> tuple(sid, vcf) }
+            .join( sniffles.out.sniffles_ch.map { sid, vcf, tbi -> tuple(sid, vcf) } )
+            .join( dipcall_vcf_ch, remainder: true )
+            .join( hapdiff_vcf_ch, remainder: true )
+            .join( parent_pair_ch, remainder: true )
+            .join( sv_origin_ch, remainder: true )
+            // remainder also emits right-only items (e.g. a family.json child
+            // with no reads) -- drop those; index rather than destructure
+            .filter { it.size() > 2 && it[1] != null && it[2] != null }
+            .map { it ->
+                def parents = it.size() > 5 ? it[5] : null
+                def sv_tsv  = it.size() > 6 ? it[6] : null
+                tuple(it[0], it[1], it[2], it[3] ?: no_file, it[4] ?: no_file,
+                      parents ? parents[0] : no_file, parents ? parents[1] : no_file, sv_tsv ?: no_file) }
+    )
+
+    // nothing below runs without annotation + family structure
+    if (params.run_snpeff && params.family_json) {
+
+    if (!params.snpeff_db) { exit 1, 'params.snpeff_db not set!' }
+    if (!params.snpeff_data_dir) { exit 1, 'params.snpeff_data_dir not set!' }
+
+    snpeff( consolidate_variants.out.consolidated_ch, ch_genome,
+            params.snpeff_gtf ? file(params.snpeff_gtf, checkIfExists: true) : file("NO_FILE") )
+
+    vcf_manifest_ch = snpeff.out.snpeff_vcf_ch
+        .map { sid, vcf -> "${sid}\t${vcf.name}" }
+        .collectFile(name: 'vcf_manifest.tsv', newLine: true, sort: true)
+    vcfs_ch = snpeff.out.snpeff_vcf_ch.map { sid, vcf -> vcf }.collect()
+
+    // 1000 Genomes CHM13 EUR AF (kg_AF_EUR column), alongside gnomAD
+    kg_af_vcf_ch = Channel.value(file("NO_FILE"))
+    if (params.kg_af_vcf || params.kg_chm13_vcfs) {
+        kg_af()
+        kg_af_vcf_ch = kg_af.out.kg_af_ch
+    }
+
+    ////////////////// 7 + 8. MILD vs SEVERE HAPLOTYPES, THEN GENETIC MODELS /////////////////////
+    if (run_trio) {
+        // which parental haplotypes each mild/severe pair shares -> each mild
+        // variant (already ORIGIN-labelled) marked shared / mild_specific ->
+        // recessive/dominant models (<results>/07_haplotypes)
+        haplotype_analysis(
+            file(params.family_json), trio_family.out.parent_vcf, small_vcf_ch,
+            vcf_manifest_ch, vcfs_ch, kg_af_vcf_ch
+        )
+        recessive_ch = haplotype_analysis.out.recessive_modifier_ch
+        dominant_ch = haplotype_analysis.out.dominant_modifier_ch
+    } else {
+        // no parents: legacy variant-level search (exact-match severe filter,
+        // read-phase compound hets) -- bin/recessive_modifier_consolidated.py
+        recessive_modifier( file(params.family_json), vcf_manifest_ch, vcfs_ch, kg_af_vcf_ch )
+        recessive_ch = recessive_modifier.out.recessive_modifier_ch
+        dominant_ch = recessive_modifier.out.dominant_modifier_ch
+    }
+
+    ////////////////// 9. CANDIDATE ANNOTATION + REPORT /////////////////////
+    candidate_annotation(
+        recessive_ch, dominant_ch, file(params.family_json),
+        vcf_manifest_ch, vcfs_ch, samtools_fai_index,
+        repeat_pairs_ch, cnv_gene_cn_ch
+    )
+
+    } // run_snpeff && family_json
 }
