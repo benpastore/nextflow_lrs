@@ -10,7 +10,7 @@ mean CpG 5mC level of the gene's promoter(s) is compared:
   maternal   only reads on the child's maternal haplotype
 
 and each parental side is labelled with whether the two sibs inherited the
-SAME haplotype from that parent there (bin/sib_haplotype_sharing.py
+SAME haplotype from that parent there (hap-ibd, bin/hapibd_segments.py
 segments): a methylation difference on a not_shared haplotype can be
 sequence-driven (cis); one on a shared haplotype is an epigenetic
 difference on identical sequence.
@@ -309,7 +309,7 @@ def level(a, min_cpgs):
 # ------------------------------------------------------------------ sibling sharing
 
 class Sharing(object):
-    """Per (mild, severe, parent, chrom): sorted segments (as in haplotype_modifier.py)."""
+    """Per (mild, severe, parent, chrom): sorted segments (cohort.sib_parent_segments.tsv)."""
 
     def __init__(self, path):
         self.segs = defaultdict(list)

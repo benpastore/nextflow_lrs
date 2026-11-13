@@ -1,9 +1,11 @@
 nextflow.enable.dsl=2
 
-// Annotation of modifier candidates + final report. Moved out of main.nf
-// unchanged: takes the cohort recessive/dominant TSVs (from either the
-// haplotype-aware or the legacy modifier search -- same schema) and adds
-// AlphaGenome, AlphaMissense and the per-variant report.
+// allele_frequency: population AF into every child's snpEff VCF (used).
+//
+// candidate_annotation: AlphaGenome, AlphaMissense and the per-variant report
+// over a candidate list in the cohort recessive/dominant TSV schema.
+// NOT CALLED by main.nf at the moment -- the genetic models that produced
+// those TSVs were removed; kept to reconnect to a new candidate step.
 
 include { INDEX_REFERENCE as INDEX_HG38_REFERENCE } from '../modules/samtools/main.nf'
 include { alphagenome; alphamissense; variant_report } from './ont.nf'
@@ -82,8 +84,8 @@ workflow candidate_annotation {
         )
 }
 
-// Population AF written into every child's snpEff VCF once, before the
-// modifier search (see modules/af_annotate/main.nf).
+// Population AF written into every child's snpEff VCF once, right after
+// snpEff (see modules/af_annotate/main.nf).
 
 workflow allele_frequency {
 

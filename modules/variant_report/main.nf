@@ -8,7 +8,7 @@
 
 process VARIANT_REPORT {
 
-    label 'recessive_modifier'
+    label 'cohort_python'
     publishDir "${params.results}/10_variant_report", mode: params.publish_mode
 
     input:

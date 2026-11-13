@@ -37,7 +37,7 @@ process SV_TRIO_ORIGIN {
         -child_snv ${child_snv} \\
         -father_snv ${father_snv} \\
         -mother_snv ${mother_snv} \\
-        -merge_dist ${params.recessive_modifier_sv_merge_dist ?: 500} \\
+        -merge_dist ${params.sv_merge_dist ?: 500} \\
         -output ${child}.sv_trio_origin.tsv \\
         -block_output ${child}.sv_trio_blocks.tsv
     """

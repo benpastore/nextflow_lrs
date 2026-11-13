@@ -9,7 +9,7 @@
 
 process METHYLATION_COMPARE {
 
-    label 'recessive_modifier'
+    label 'cohort_python'
     publishDir "${params.results}/09_methylation_compare", mode: params.publish_mode
 
     input:

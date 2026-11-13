@@ -3,8 +3,9 @@ nextflow.enable.dsl=2
 // De novo assembly branch (hifiasm -> gfatools -> dorado polish -> dipcall /
 // hapdiff). Moved out of main.nf unchanged; OFF by default
 // (params.assemble_genome = false) while the analysis focuses on the
-// alignment-based calls. Turn it back on with --assemble_genome true and its
-// dipcall/hapdiff calls rejoin consolidate_variants automatically.
+// alignment-based calls. With --assemble_genome true its dipcall/hapdiff calls
+// are published on their own; they are NOT merged into the alignment-based
+// master VCF (consolidate_variants).
 
 include { hifasim; hifasim_trio; gfatools; dorado; genome_stats; minimap2_map_asm_to_ref;
           chrom_coverage; dipcall; hapdiff } from './ont.nf'

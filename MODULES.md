@@ -255,7 +255,7 @@ reads are what's actually informative about haplotype).
 ### `CNV_COMPARE` — `modules/cnv_repeat_compare/main.nf`
 Cohort-wide, gated by `--family_json` + `--run_cnv_compare`. `bin/cnv_compare.py` turns every child's
 Spectre VCF into a per-gene copy number (genes from `--cnv_repeat_gtf`, default `--snpeff_gtf`; no call = CN 2),
-then compares each mild child with its severe siblings (family.json grouping, as in the modifier search).
+then compares each mild child with its severe siblings (family.json mild/severe grouping).
 - **in**: family.json, a `sampleID<TAB>vcf` manifest + every `*.spectre.vcf.gz`, the GTF
 - **out** (`09_cnv_repeat_compare/cnv`): `cohort.cnv_gene_summary.tsv` (per gene: `n_mild_higher` = mild children
   with more copies than every severe sibling, `n_mild_lower`, per-pair counts, sign test, concordant-severe background
@@ -292,15 +292,17 @@ Silently produces empty output if MM/ML tags were ever dropped upstream (see `SA
 ## 6. Variant consolidation
 
 ### `CONSOLIDATE_VARIANTS` — `modules/consolidate_variants/main.nf`
-Merges per-caller VCFs (clair3+longphase, sniffles, dipcall, hapdiff) into one master per-sample VCF
-via `bin/consolidate_variants.py`, tagging each variant with which caller(s) found it.
+Merges the **alignment-based** per-caller VCFs (phased small variants in the `clair3_longphase` column — WhatsHap
+family-phased with parents, else longphase_sv — and Sniffles SVs) into one master per-sample VCF via
+`bin/consolidate_variants.py`, tagging each variant with which caller(s) found it. Assembly-based calls
+(dipcall / hapdiff, `--assemble_genome`) are kept separate and not merged in.
 With parents (`--run_trio_analysis`), every site also gets **`INFO/ORIGIN`** = paternal / maternal / both / unknown —
 the parental haplotype carrying the ALT — plus `ORIGIN_SOURCE` and a `DE_NOVO` flag:
 small variants from the parents' Clair3 genotypes (`mendelian`), else the child's WhatsHap phase block whose HP1 was
 assigned to a parent by its Mendelian-informative SNVs (`phase_block`); SVs from `SV_TRIO_ORIGIN`, matched by Sniffles
 ID (`sv_trio_origin`). This is the one label small variants and SVs share (their PS values are not comparable).
-- **in**: `tuple val(sampleID), val(clair3_longphase_vcf), val(sniffles_vcf), val(dipcall_vcf), val(hapdiff_vcf), val(father_vcf), val(mother_vcf), val(sv_origin)`
-  — assembly-caller slots are `"NO_FILE"` when `--assemble_genome` is off; parent/SV-origin slots are `"NO_FILE"` without trios
+- **in**: `tuple val(sampleID), val(clair3_longphase_vcf), val(sniffles_vcf), val(father_vcf), val(mother_vcf), val(sv_origin)`
+  — parent/SV-origin slots are `"NO_FILE"` without trios
 - **out**: `tuple val(sampleID), path("*.master.vcf")` → `consolidated_ch`; trio mode also
   `<sample>.phase_block_origin.tsv` (per phase block: informative SNVs, HP1's parent)
 
@@ -318,7 +320,7 @@ each gets an `@RG SM:<sample>` when it lacks one (pedigree mode assigns reads by
 phased too, every child is phased against the same parental haplotypes, and Mendelian conflicts are judged
 against all children. Logs het-SNV phasing rates per member. With `--run_trio_analysis` each child's VCF (ALT
 sites only) **replaces** `LONGPHASE_SV`'s as its phased small-variant VCF for `CONSOLIDATE_VARIANTS` and
-`SIB_HAPLOTYPE_SHARING`. SVs aren't included (whatshap can't phase them) — their parent of origin comes from
+the hap-ibd steps. SVs aren't included (whatshap can't phase them) — their parent of origin comes from
 `SV_TRIO_ORIGIN`, and both meet in `CONSOLIDATE_VARIANTS`' `INFO/ORIGIN`.
 - **in**: `tuple val(ref), val(ref_fai)`, `tuple val(family), val(father), val(mother), val(father_vcf), val(mother_vcf), val(father_bam), val(mother_bam), val(children), val(child_vcfs), val(child_bams)`
 - **out** (`06_variants/whatshap_family_phased`): `<child>.trio.whatshapphase.vcf.gz` (+ `.tbi`) per child →
@@ -328,7 +330,7 @@ sites only) **replaces** `LONGPHASE_SV`'s as its phased small-variant VCF for `C
 ### `SV_TRIO_ORIGIN` — `modules/sv_trio_origin/main.nf`
 Parent of origin for each child Sniffles SV (`bin/sv_trio_origin.py`). Parents get their own `SNIFFLES` run in
 `subworkflows/trio.nf`. Two lines of evidence: **transmission** (SV also in father's / mother's Sniffles calls —
-same type with INS~DUP compatible, start within `recessive_modifier_sv_merge_dist`, size ratio ≥ 0.5) and
+same type with INS~DUP compatible, start within `sv_merge_dist`, size ratio ≥ 0.5) and
 **haplotype** (the SV's Sniffles `PHASE` hp/block, with each LONGPHASE round-1 block's HP1 assigned to a parent from
 the child's phased het SNVs where the parents' genotypes differ; ≥ 3 informative SNVs, ≥ 80% agreement).
 - **in**: `tuple val(child), val(child_sv), val(child_snv), val(father), val(mother), val(father_snv), val(mother_snv), val(father_sv), val(mother_sv)`
@@ -336,12 +338,12 @@ the child's phased het SNVs where the parents' genotypes differ; ≥ 3 informati
   origin_source = transmission+haplotype / transmission / haplotype / conflict), `<child>.sv_trio_blocks.tsv`
   (per block: informative SNVs, HP1 parent)
 
-## 7b. Haplotype-first modifier search — `subworkflows/haplotypes.nf`, gated by `--run_trio_analysis` + `--family_json`
+## 7b. Annotation, sibling sharing, methylation — `subworkflows/annotation.nf`, `subworkflows/haplotypes.nf`
 
-Replaces `RECESSIVE_MODIFIER` when parents are available (without parents the legacy search still runs).
-Flow: `WHATSHAP_PHASE_FAMILY` + `SV_TRIO_ORIGIN` → `CONSOLIDATE_VARIANTS` (INFO/ORIGIN) → `SNPEFF` → `ANNOTATE_AF` →
-`SIB_HAPLOTYPE_SHARING` → `HAPLOTYPE_MODIFIER` → AlphaGenome / AlphaMissense.
-Haplotypes are identified **before** any genetic model is applied.
+Flow: `WHATSHAP_PHASE_FAMILY` + `SV_TRIO_ORIGIN` → `CONSOLIDATE_VARIANTS` (INFO/ORIGIN) → `SNPEFF` → `ANNOTATE_AF`;
+with parents also `WHATSHAP_PHASE_FAMILY` family VCF → `ORIENT_PHASE` → `HAP_IBD` → `IBD_SEGMENTS` →
+`MILD_HAPLOTYPE_VARIANTS` (+ `METHYLATION_COMPARE`). No genetic (recessive / dominant) model is run;
+the end products are the annotated VCFs, the sibling sharing segments and the CNV / repeat / methylation comparisons.
 
 ### `ANNOTATE_AF` — `modules/af_annotate/main.nf`
 `bin/annotate_af.py`, once for the whole cohort, right after `SNPEFF`. Writes population allele frequency into
@@ -349,32 +351,44 @@ every child's snpEff VCF: `INFO/gnomAD_AF_NFE` (`params.gnomad_chm13_vcf`, Ensem
 CHM13) and `INFO/KG_AF_EUR` (1000 Genomes EUR re-called on CHM13, `kg_af` subworkflow; off unless
 `kg_chm13_vcfs` / `kg_af_vcf` is set). The two fill each other's gaps — the gnomAD projection misses sites where
 CHM13 carries the minor allele. Annotation only, nothing filtered; a `##af_sources` header records which
-sources were used. Every later step (modifier search, AlphaGenome input, report) reads AF from these VCFs.
+sources were used.
 - **in**: snpEff VCF manifest + VCFs, 1000G sites VCF (or `NO_FILE`)
 - **out** (`06_variants/snpeff_af`): `<child>.snpeff.af.vcf.gz`
 
-### `SIB_HAPLOTYPE_SHARING` — `modules/haplotype/main.nf`
-For every mild × severe sibling pair, which parental haplotypes they share along the genome
-(`bin/sib_haplotype_sharing.py`). Uses genotypes only: at sites where one parent is het and the other
-homozygous, each child's allele from the het parent is read off its genotype; a 2-state HMM (shared /
-not_shared) turns sibling match/mismatch into segments, per parent, then paternal × maternal → IBD0/1/2.
-chrX/Y/M are skipped.
-- **in**: `path(family_json)`, `path(vcf_manifest)`, `path(vcfs)` (parents' Clair3 + children's WhatsHap-trio VCFs)
-- **out** (`07_haplotypes`): `cohort.sib_parent_segments.tsv`, `cohort.sib_ibd_segments.tsv`,
-  `cohort.sib_ibd_summary.tsv` (genome fraction IBD0/1/2 per pair — expect ~25/50/25%, a sample-swap check)
+### `ORIENT_PHASE` — `modules/haplotype/main.nf`
+Per family, `bin/orient_family_phase.py` on `WHATSHAP_PHASE_FAMILY`'s family VCF. hap-ibd reads GT order as two
+chromosome-long haplotypes and ignores phase blocks, so each child's WhatsHap blocks are flipped to
+**paternal|maternal**: a block's HP1 is assigned to a parent by voting over its Mendelian-informative het SNVs
+(parents' genotypes from the same VCF; ≥ 3 votes, ≥ 80% agreement). Children only, biallelic PASS SNVs; a site is
+dropped if any child's het is unoriented or below `hapibd_min_gq`. chrX/Y/M excluded (`hap_exclude_chroms`).
+- **out** (`07_haplotypes/oriented`): `<family>.oriented.vcf.gz`, `<family>.orient_blocks.tsv`
 
-### `HAPLOTYPE_MODIFIER` — `modules/haplotype/main.nf`
-`bin/haplotype_modifier.py`. Step 1 takes each in-scope mild variant's parental haplotype (`INFO/ORIGIN`) and
-marks whether a severe sib shares that haplotype: `shared_haplotype` / `mild_specific` / `shared_allele` / `de_novo` / `unknown_haplotype`.
-Step 2 runs the models on those labels:
-- **dominant** — `mild_specific` or `de_novo` variants only (shared-haplotype variants removed), then
-  gene-level: a gene is dropped if any severe sib / concordant-severe sample carries any in-scope variant in it
-- **recessive** — gene biallelic in mild (homozygous, paternal + maternal hits, or read-phase trans when origin is
-  unknown), not biallelic in any severe sib, and not IBD2 with a severe sib. Shared-haplotype variants are kept
-  as compound-het partners: mild = hapA(m1)+hapB(m2), severe = hapA(m1)+hapC still passes, both rows reported.
-- **out** (`07_haplotypes`): `cohort.{recessive,dominant}_modifier.tsv` + `.gene_summary.tsv` (same schema as
-  `RECESSIVE_MODIFIER` plus `parent_of_origin`, `origin_source`, `haplotype_status`, `category`, `ibd_vs_severe`),
-  `cohort.haplotype_variants.tsv` (every in-scope mild variant, labelled), `cohort.haplotype_funnel.tsv`
+### `HAP_IBD` — `modules/haplotype/main.nf`
+Per family, hap-ibd (`params.hapibd_jar`, `hapibd` label, Java container) on the oriented VCF with a uniform
+1 cM/Mb map generated from the reference `.fai`, `min-mac=1` (a variant only one child carries is still evidence
+their haplotypes differ). Segment-length and gap settings: `hapibd_min_seed` / `_min_extend` / `_min_output` /
+`_max_gap`. Haplotype 1 = paternal, 2 = maternal for every child.
+- **out** (`07_haplotypes/hapibd`): `<family>.hapibd.ibd.gz`, `.log`
+
+### `IBD_SEGMENTS` — `modules/haplotype/main.nf`
+Cohort-wide, `bin/hapibd_segments.py`. Per mild × severe pair: mild hap 1 IBD with severe hap 1 → paternal copy
+shared, hap 2 with hap 2 → maternal copy shared; the rest of each chromosome (first to last marker) is
+not_shared. A not_shared stretch shorter than `hapibd_bridge_cm` with shared on both sides is bridged to shared
+(a real one needs two nearby crossovers; hap-ibd segments are routinely broken by genotype / switch errors).
+Cross-haplotype segments (hap 1 with hap 2) are counted, not used.
+- **out** (`07_haplotypes`): `cohort.sib_parent_segments.tsv` (per parent: shared / not_shared, bridged, n_sites,
+  n_mismatch), `cohort.sib_ibd_segments.tsv` (IBD0/1/2), `cohort.sib_ibd_summary.tsv` (genome fractions — expect
+  ~25/50/25% — mismatch rate inside shared segments, cross-haplotype and bridged counts)
+
+### `MILD_HAPLOTYPE_VARIANTS` — `modules/haplotype/main.nf`
+Cohort-wide, `bin/mild_haplotype_variants.py`. Every mild-child variant (annotated master VCF) is placed on a
+parental copy by `INFO/ORIGIN` and looked up in the segments: paternal / maternal → reported if that copy is
+not_shared; homozygous → if either copy is; unknown origin → only in IBD0. No genetic model, no filtering:
+`present_in_severe` says whether the severe sib carries the allele anyway, plus genes, worst snpEff
+effect / impact and gnomAD / 1000G AF.
+- **out** (`08_mild_haplotype_variants`): `cohort.mild_haplotype_variants.tsv.gz`, `cohort.mild_haplotype_genes.tsv`
+  (per gene: n variants, absent in severe, HIGH / MODERATE, rare at `mild_variants_rare_af`),
+  `cohort.mild_haplotype_funnel.tsv`
 
 ### `METHYLATION_COMPARE` — `modules/methylation_compare/main.nf` (`--run_methylation` + trio)
 `bin/methylation_compare.py`. Mild vs severe promoter 5mC (−2 kb/+500 bp around each TSS, merged per gene), per
@@ -389,26 +403,21 @@ shared one it is epigenetic on identical sequence. Flag at |Δ| ≥ `meth_min_de
   (SNRPN/PEG3/MEST/… should be methylated on the maternal side, H19/MEG3 paternal — `consistent=no` across the
   board means the HP → parent mapping is inverted)
 
-### `VARIANT_REPORT` sibling-pair summaries — `modules/variant_report/main.nf` (`10_variant_report`)
-- `cohort.sibpair_gene_summary.tsv` — full record per (mild, severe, gene): every AlphaGenome / AlphaMissense /
-  AF / snpEff / repeat / CNV column, plus `meth_*` (combined and per-parent Δ, haplotype status, flag)
-- `cohort.sibpair_gene_summary.slim.tsv` — the digestible version: `alphagenome_gene` and
-  `alphagenome_variant_max` as one column each (signed score + scorer/tissue), top-3 other AG-impacted genes,
-  `alphamissense` (score, class, protein change), `min_pop_AF`, `cnv` (`mild 3 / severe 2`), `repeat_flag`,
-  `promoter_methylation` (flag, else combined Δ), `variants`
-
----
-
-## 8. Variant annotation — gated by `--run_alphagenome` (scaffold, default `false`)
-
-### `ALPHAGENOME` — `modules/alphagenome/main.nf`
-Variant-effect annotation of the master VCF via `bin/run_alphagenome.py`.
-- **in**: `tuple val(sampleID), val(vcf)`, `tuple path(ref), path(ref_fai)`
-- **out**: `tuple val(sampleID), path("*.alphagenome.tsv")` → `alphagenome_ch`
-
 ---
 
 ## Included but not invoked
+
+**Candidate annotation (kept, not called).** These scored the recessive / dominant model candidates
+(`cohort.{recessive,dominant}_modifier.tsv`). The models were removed, so `main.nf` no longer calls them; they are
+kept to reconnect to a new candidate step (`candidate_annotation` in `subworkflows/annotation.nf`):
+
+- `BUILD_ALPHAGENOME_INPUT` / `LIFTOVER_ALPHAGENOME_VARIANTS` / `ALPHAGENOME` / `MERGE_ALPHAGENOME_CHUNKS` /
+  `ALPHAGENOME_API` — `modules/alphagenome/main.nf` (AlphaGenome regulatory-effect scoring, lifted to hg38)
+- AlphaMissense lookup — `modules/alphamissense/main.nf`
+- `VARIANT_REPORT` — `modules/variant_report/main.nf` (per-variant report, sibling-pair gene summary + slim
+  version, with CNV / repeat / methylation columns)
+
+**Illumina.**
 
 These modules exist (`subworkflows/illumina.nf`) but are no longer `include`d in `main.nf` — present in case a future Illumina-only branch is wired in, not part of any current run:
 

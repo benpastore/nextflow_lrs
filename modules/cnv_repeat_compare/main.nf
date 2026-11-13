@@ -1,6 +1,6 @@
 // Mild-vs-severe sibling comparisons of copy-number variants (Spectre) and
 // repeat expansions (Straglr), cohort-wide, using family.json's mild/severe
-// groupings (same as the modifier search, see load_family_groups in
+// groupings (see load_family_groups in
 // bin/_modifier_common.py). Gene association comes from the same GTF
 // snpEff is built from (params.cnv_repeat_gtf, default params.snpeff_gtf).
 //   CNV_COMPARE     bin/cnv_compare.py    -> 09_cnv_repeat_compare/cnv

@@ -11,7 +11,7 @@ child's Spectre CNV calls (modules/spectre -> *.spectre.vcf.gz).
    SVTYPE + GT (DEL het = 1, DEL hom = 0, DUP het = 3, DUP hom = 4) -- the
    cn_source column says which.
 
-2. Within each family (family.json, same grouping as the modifier search:
+2. Within each family (family.json, load_family_groups in _modifier_common.py:
    every mild child vs every severe sibling of the same father+mother),
    one row per (mild, severe sibling, gene) where the CN differs
    -> <prefix>.cnv_mild_vs_severe.tsv

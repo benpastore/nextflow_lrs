@@ -2,7 +2,7 @@
 // recall of all 3,202 high-coverage 1KGP samples against CHM13 (Aganezov et
 // al. 2022), reduced once to a small sites-only VCF whose INFO/AF is
 // recomputed over the unrelated EUR samples (comparable to gnomAD AF_nfe).
-// Read by the modifier search (kg_AF_EUR column, see GnomadNFEAnnotator in
+// Read by ANNOTATE_AF (INFO/KG_AF_EUR, see GnomadNFEAnnotator in
 // bin/_modifier_common.py) alongside the Ensembl gnomAD projection, which
 // misses sites where CHM13 carries the minor allele. "Build once, reuse
 // forever" -- published under kg_af_dir, which the kg_af subworkflow

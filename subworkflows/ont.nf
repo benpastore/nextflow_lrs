@@ -526,7 +526,7 @@ workflow snpeff {
 include { KG_AF_SITES; KG_AF_MERGE } from '../modules/kg_af/main.nf'
 workflow kg_af {
 
-    // 1000 Genomes CHM13 EUR sites VCF for the modifier search's kg_AF_EUR
+    // 1000 Genomes CHM13 EUR sites VCF for ANNOTATE_AF's INFO/KG_AF_EUR
     // column: params.kg_af_vcf as-is, else the copy an earlier run's
     // KG_AF_MERGE published, else build it from params.kg_chm13_vcfs
     // (one KG_AF_SITES task per chromosome file)
@@ -548,30 +548,6 @@ workflow kg_af {
 
     emit :
         kg_af_ch = kg_sites_ch
-}
-
-include { RECESSIVE_MODIFIER } from '../modules/recessive_modifier/main.nf'
-workflow recessive_modifier {
-
-    take :
-        family_json    // path to family.json
-        vcf_manifest   // path: sampleID<TAB>snpeff_vcf_path, one per sample
-        vcfs           // collected list of every sample's snpeff vcf (staged alongside the manifest)
-        kg_af_vcf      // 1000 Genomes CHM13 EUR sites VCF (kg_af workflow), or file("NO_FILE")
-
-    main :
-        RECESSIVE_MODIFIER(
-            family_json, vcf_manifest, vcfs, kg_af_vcf,
-            file("${params.bin}/_modifier_common.py"),
-            file("${params.bin}/recessive_modifier_consolidated.py"),
-            file("${params.bin}/dominant_modifier_consolidated.py")
-        )
-
-    emit :
-        recessive_modifier_ch = RECESSIVE_MODIFIER.out.recessive_modifier_ch
-        recessive_modifier_gene_summary_ch = RECESSIVE_MODIFIER.out.recessive_modifier_gene_summary_ch
-        dominant_modifier_ch = RECESSIVE_MODIFIER.out.dominant_modifier_ch
-        dominant_modifier_gene_summary_ch = RECESSIVE_MODIFIER.out.dominant_modifier_gene_summary_ch
 }
 
 include { FETCH_CHM13_TO_HG38_CHAIN; BUILD_ALPHAGENOME_INPUT; LIFTOVER_ALPHAGENOME_VARIANTS; ALPHAGENOME; MERGE_ALPHAGENOME_CHUNKS; ALPHAGENOME_API } from '../modules/alphagenome/main.nf'

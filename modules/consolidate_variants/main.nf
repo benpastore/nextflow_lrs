@@ -10,12 +10,13 @@ process CONSOLIDATE_VARIANTS {
     // (bin/sv_trio_origin.py) add INFO/ORIGIN -- the parental haplotype each
     // variant is on -- to every site, plus <sample>.phase_block_origin.tsv.
     // Without parents they are NO_FILE and the master VCF has no ORIGIN.
+    //
+    // Alignment-based callers only: the phased small-variant VCF and Sniffles.
+    // Assembly-based calls (dipcall / hapdiff) are not merged in.
     input:
         tuple val(sampleID),
             val(clair3_longphase_vcf),
             val(sniffles_vcf),
-            val(dipcall_vcf),
-            val(hapdiff_vcf),
             val(father_vcf),
             val(mother_vcf),
             val(sv_origin)
@@ -43,8 +44,6 @@ process CONSOLIDATE_VARIANTS {
         --sample ${sampleID} \\
         --caller clair3_longphase:alignment:${clair3_longphase_vcf} \\
         --caller sniffles:alignment:${sniffles_vcf} \\
-        --caller dipcall:assembly:${dipcall_vcf} \\
-        --caller hapdiff:assembly:${hapdiff_vcf} \\
         ${trio_args} \\
         --output ${sampleID}.master.vcf
     """

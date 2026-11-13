@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
 """
-Shared parsing/annotation/family-grouping code for the consolidated+snpEff
-modifier-search scripts (recessive_modifier_consolidated.py,
-dominant_modifier_consolidated.py). Not a standalone entry point.
-
-Both scripts work from the same input (one consolidated+snpEff VCF per
-sample -- CALLERS/NUM_CALLERS + ANN, with each detecting caller's own
-GT:PS kept in its own sample column -- see bin/consolidate_variants.py and
-modules/snpeff/main.nf) and the same family.json-derived mild/severe
-sibling groupings. What differs between the two models is only how many
-qualifying variants a gene needs in one mild sample (recessive: homozygous,
-or 2 het confirmed in trans; dominant: 1 variant, any zygosity) -- that
-logic lives in each model's own script, not here.
+Shared helpers for the pipeline's Python steps (bin/): logging + timing, a
+gz-aware opener, the gnomAD / 1000 Genomes AF lookup (GnomadNFEAnnotator,
+used by annotate_af.py), snpEff ANN / INFO / GT parsing, the caller
+priority used to pick whose GT a site is read from, and the family.json
+mild/severe groupings + VCF manifests. Not a standalone entry point.
 """
 
-import bisect
 import gzip
 import json
 import logging
-import os
-import pickle
 import time
 from collections import defaultdict
 
@@ -30,8 +20,7 @@ except ImportError:
 
 # Configure logging -- colorlog is a nice-to-have (not every environment
 # this runs in has it, e.g. the rnaseq container); fall back to plain
-# logging rather than failing outright. Shared logger name so recessive
-# and dominant runs interleave sensibly if ever run in the same process.
+# logging rather than failing outright.
 logger = logging.getLogger("color_logger")
 
 if not logger.handlers:
@@ -172,68 +161,6 @@ class GnomadNFEAnnotator:
         return results
 
 
-def annotate_final_pass(final_pass, annotator):
-    """{(var_id, gene): AF or None} for every final-pass candidate, via one
-    annotator (GnomadNFEAnnotator) pass; {} when the annotator is None."""
-    if annotator is None:
-        return {}
-    logger.info(f"Annotating passing variants with {annotator.label} {annotator.field}...")
-    annotator.load()
-    batch = [(key, info["rec"]["chrom"], info["rec"]["pos"], info["rec"]["ref"], info["rec"]["alt"])
-             for key, info in final_pass.items()]
-    results = annotator.annotate_batch([(c, p, r, a) for _, c, p, r, a in batch])
-    return {key: results.get(f"{chrom}:{pos}:{ref}>{alt}") for key, chrom, pos, ref, alt in batch}
-
-
-# CDS-affecting terms -- SnpEff doesn't tag most coding changes with a
-# literal "cds" term, so "cds" is interpreted as this whole consequence set.
-CDS_TERMS = {
-    'missense_variant',
-    'synonymous_variant',
-    'stop_gained',
-    'stop_lost',
-    'start_lost',
-    'frameshift_variant',
-    'inframe_insertion',
-    'inframe_deletion',
-    'protein_altering_variant',
-    'splice_donor_variant',
-    'splice_acceptor_variant',
-    'splice_region_variant',
-}
-# Structural-variant consequences snpEff writes for symbolic SVs (<DEL>,
-# <DUP>, <INV>, <INS>, <BND>) -- without these, only SVs that ALSO carry an
-# intron/upstream/downstream term got through, which in practice let
-# deletions pass and silently dropped most duplications, inversions and
-# breakends (whole-gene / exon-level events, the most interesting ones).
-# Matched as substrings below, so 'gene_fusion' also covers
-# 'bidirectional_gene_fusion'.
-SV_TERMS = {
-    'exon_loss_variant',
-    'transcript_ablation',
-    'feature_ablation',
-    'duplication',
-    'inversion',
-    'gene_fusion',
-    'feature_fusion',
-    'rearranged_at_DNA_level',
-    'structural_interaction_variant',
-}
-ALLOWED_ANNOTATIONS = CDS_TERMS | SV_TERMS | {
-    'exon_variant',
-    'intron_variant',
-    'upstream_gene_variant',
-    'downstream_gene_variant',
-}
-
-# ANN field index 7 (Transcript_BioType, per SnpEff's standard ANN spec:
-# Allele|Annotation|Annotation_Impact|Gene_Name|Gene_ID|Feature_Type|
-# Feature_ID|Transcript_BioType|...). Restrict to protein-coding genes --
-# SnpEff sets this structurally from the presence of CDS lines in the
-# build GTF, so it's populated even for a GTF (like a UCSC RefSeq one)
-# with no explicit gene_biotype/transcript_biotype attribute.
-PROTEIN_CODING_BIOTYPE = 'protein_coding'
-
 # Caller preference when a site was called by more than one -- read-based
 # callers (Clair3/Sniffles) first since a PS-linked phase block is more
 # directly comparable across variants than an assembly-wide haplotype;
@@ -258,14 +185,6 @@ def get_info_field(info_str, key):
     return None
 
 
-def _info_float(info_str, key):
-    v = get_info_field(info_str, key)
-    try:
-        return float(v) if v is not None else None
-    except ValueError:
-        return None
-
-
 def classify_gt(gt):
     """Return 'homo', 'het', or None (not called / ref-only) for a GT string."""
     if not gt or gt in ('.', './.', '.|.'):
@@ -277,152 +196,6 @@ def classify_gt(gt):
     if alleles[0] == alleles[1]:
         return 'homo' if alleles[0] != '0' else None
     return 'het'
-
-
-@timing
-def parse_consolidated_vcf(path):
-    """
-    Parse one sample's consolidated+snpEff VCF into {var_id: record}.
-
-    record: chrom, pos, ref, alt, svtype, genes (set), caller (the one
-    whose GT/PS we're trusting), callers_all (list), gt, ps, zygosity,
-    origin / origin_source / de_novo (INFO/ORIGIN etc., trio mode).
-    """
-    results = {}
-    caller_col_idx = {}
-    kept = 0
-    filtered_ann_type = 0
-    filtered_not_protein_coding = 0
-    filtered_no_caller = 0
-    filtered_not_called = 0
-
-    with opener(path) as f:
-        for line in f:
-            if line.startswith("##"):
-                continue
-            if line.startswith("#CHROM"):
-                cols = line.rstrip("\n").split("\t")
-                for i, name in enumerate(cols):
-                    if i >= 9:
-                        caller_col_idx[name] = i
-                continue
-
-            fields = line.rstrip("\n").split("\t")
-            if len(fields) < 9:
-                continue
-            chrom, pos, vid, ref, alt, _qual, _filt, info, fmt = fields[:9]
-
-            ann = get_ann(info)
-            if not ann:
-                continue
-            filtered_ann = [a for a in ann if len(a) > 1 and any(t in a[1] for t in ALLOWED_ANNOTATIONS)]
-            if not filtered_ann:
-                filtered_ann_type += 1
-                continue
-            # gene-level SV annotations (whole-gene duplication, gene fusion,
-            # ...; Feature_Type a[5] is not "transcript") carry no biotype at
-            # all -- keep those when the consequence is an SV term rather
-            # than dropping them as "not protein-coding". Transcript-level
-            # annotations still need protein_coding (an empty biotype there
-            # means a non-coding transcript).
-            filtered_ann = [a for a in filtered_ann if len(a) > 7 and (
-                a[7] == PROTEIN_CODING_BIOTYPE
-                or (a[7] == "" and a[5] != "transcript" and any(t in a[1] for t in SV_TERMS)))]
-            if not filtered_ann:
-                filtered_not_protein_coding += 1
-                continue
-
-            callers_field = get_info_field(info, "CALLERS")
-            callers_present = callers_field.split(",") if callers_field else []
-            chosen = next((c for c in CALLER_PRIORITY if c in callers_present and c in caller_col_idx), None)
-            if chosen is None:
-                filtered_no_caller += 1
-                continue
-
-            sample_val = fields[caller_col_idx[chosen]]
-            fmt_keys = fmt.split(":")
-            sample_vals = sample_val.split(":")
-            d = dict(zip(fmt_keys, sample_vals))
-            gt = d.get("GT", "")
-            ps = d.get("PS", "")
-
-            zygosity = classify_gt(gt)
-            if zygosity is None:
-                filtered_not_called += 1
-                continue
-
-            svtype = get_info_field(info, "SVTYPE")
-            genes = {a[3] for a in filtered_ann if len(a) > 3 and a[3]}
-
-            results[vid] = {
-                "chrom": chrom,
-                "pos": int(pos),
-                "ref": ref,
-                "alt": alt,
-                "svtype": svtype,
-                # filtered_ann itself is never read past this point -- only
-                # the gene set it collapses to below is used downstream, so
-                # don't hold onto the (potentially large, one-entry-per-
-                # transcript) parsed ANN block for every kept variant.
-                "genes": genes,
-                "caller": chosen,
-                "callers_all": callers_present,
-                "gt": gt,
-                "ps": ps,
-                "zygosity": zygosity,
-                # trio mode only (consolidate_variants.py --father-vcf/--mother-vcf):
-                # parental haplotype carrying the ALT; "unknown" otherwise
-                "origin": get_info_field(info, "ORIGIN") or "unknown",
-                "origin_source": get_info_field(info, "ORIGIN_SOURCE") or "",
-                "de_novo": "DE_NOVO" in info.split(";"),
-                # population AF written by bin/annotate_af.py (None = not in
-                # that source, or the VCF wasn't AF-annotated)
-                "gnomad_af": _info_float(info, "gnomAD_AF_NFE"),
-                "kg_af": _info_float(info, "KG_AF_EUR"),
-            }
-            kept += 1
-
-    # protein-coding count logged at INFO (not DEBUG, which this module
-    # never enables) since a GTF with no usable biotype info would silently
-    # zero out every variant here otherwise -- this is the one counter that
-    # needs to be visible by default to catch that failure mode.
-    logger.info(
-        f"Parsed {os.path.basename(path)}: kept {kept}, "
-        f"filtered {filtered_ann_type} (annotation type), "
-        f"{filtered_not_protein_coding} (not protein-coding), "
-        f"{filtered_no_caller} (no usable caller column), "
-        f"{filtered_not_called} (not called by chosen caller)"
-    )
-    return results
-
-
-def build_severe_index(severe_records_list):
-    """severe_records_list: list of per-sample {var_id: record} dicts.
-    Returns (small_variant_keys, sv_positions_by_chrom_type)."""
-    small_keys = set()
-    sv_positions = defaultdict(list)
-    for records in severe_records_list:
-        for rec in records.values():
-            if rec["svtype"]:
-                sv_positions[(rec["chrom"], rec["svtype"])].append(rec["pos"])
-            else:
-                small_keys.add((rec["chrom"], rec["pos"], rec["ref"], rec["alt"]))
-    for k in sv_positions:
-        sv_positions[k].sort()
-    return small_keys, sv_positions
-
-
-def in_severe(rec, small_keys, sv_positions, sv_merge_dist):
-    if rec["svtype"]:
-        positions = sv_positions.get((rec["chrom"], rec["svtype"]))
-        if not positions:
-            return False
-        i = bisect.bisect_left(positions, rec["pos"])
-        for j in (i - 1, i):
-            if 0 <= j < len(positions) and abs(positions[j] - rec["pos"]) <= sv_merge_dist:
-                return True
-        return False
-    return (rec["chrom"], rec["pos"], rec["ref"], rec["alt"]) in small_keys
 
 
 def load_family_groups(family_json_path):

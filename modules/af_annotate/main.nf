@@ -8,7 +8,7 @@
 
 process ANNOTATE_AF {
 
-    label 'recessive_modifier'
+    label 'cohort_python'
     publishDir "${params.results}/06_variants/snpeff_af", mode: params.publish_mode
 
     input:

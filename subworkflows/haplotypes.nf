@@ -1,41 +1,58 @@
 nextflow.enable.dsl=2
 
-// Mild vs severe haplotype comparison -> genetic models. See modules/haplotype/main.nf.
-include { SIB_HAPLOTYPE_SHARING; HAPLOTYPE_MODIFIER } from '../modules/haplotype/main.nf'
+// Mild vs severe sibling haplotype sharing with hap-ibd. See modules/haplotype/main.nf.
+include { ORIENT_PHASE; HAP_IBD; IBD_SEGMENTS; MILD_HAPLOTYPE_VARIANTS } from '../modules/haplotype/main.nf'
 
 workflow haplotype_analysis {
 
     take :
         family_json
-        parent_vcf       // tuple(parentID, clair3 vcf)       -- trio_family.out.parent_vcf
-        child_vcf        // tuple(childID, phased vcf, tbi)    -- WHATSHAP_PHASE_FAMILY child VCF
-        vcf_manifest     // childID<TAB>snpEff VCF name (consolidated, with INFO/ORIGIN)
-        vcfs             // collected snpEff VCFs (with INFO/gnomAD_AF_NFE, KG_AF_EUR)
+        family_vcf       // tuple(family, family.whatshapphase.vcf.gz, tbi) -- WHATSHAP_PHASE_FAMILY
+        samtools_fai_index
 
     main :
-        // 1. which parental haplotypes each mild/severe pair shares
-        geno_vcf = parent_vcf.mix( child_vcf.map { sid, vcf, tbi -> tuple(sid, vcf) } )
-        geno_manifest = geno_vcf
-            .map { sid, vcf -> "${sid}\t${vcf.name}" }
-            .collectFile(name: 'haplotype_vcf_manifest.tsv', newLine: true, sort: true)
-        SIB_HAPLOTYPE_SHARING(
-            family_json, geno_manifest, geno_vcf.map { sid, vcf -> vcf }.collect(),
-            file("${params.bin}/sib_haplotype_sharing.py")
-        )
+        // 1. orient each child's phase paternal|maternal, children only
+        ORIENT_PHASE( family_vcf, family_json, file("${params.bin}/orient_family_phase.py") )
 
-        // 2. mild variants on shared vs mild-specific haplotypes -> models
-        HAPLOTYPE_MODIFIER(
-            family_json, vcf_manifest, vcfs,
-            SIB_HAPLOTYPE_SHARING.out.parent_segments_ch,
-            file("${params.bin}/_modifier_common.py"),
-            file("${params.bin}/haplotype_modifier.py")
+        // 2. hap-ibd per family (haplotype 1 = paternal, 2 = maternal)
+        HAP_IBD( ORIENT_PHASE.out.oriented_ch, samtools_fai_index )
+
+        // 3. per mild x severe pair, per parent: shared / not_shared, IBD0/1/2
+        fam_ch = ORIENT_PHASE.out.oriented_ch.join( HAP_IBD.out.ibd_ch )
+        IBD_SEGMENTS(
+            family_json,
+            fam_ch.map { fam, vcf, ibd -> fam }.collect(),
+            fam_ch.map { fam, vcf, ibd -> vcf }.collect(),
+            fam_ch.map { fam, vcf, ibd -> ibd }.collect(),
+            file("${params.bin}/hapibd_segments.py")
         )
 
     emit :
-        recessive_modifier_ch = HAPLOTYPE_MODIFIER.out.recessive_modifier_ch
-        dominant_modifier_ch  = HAPLOTYPE_MODIFIER.out.dominant_modifier_ch
-        haplotype_variants_ch = HAPLOTYPE_MODIFIER.out.haplotype_variants_ch
-        parent_segments_ch    = SIB_HAPLOTYPE_SHARING.out.parent_segments_ch
+        parent_segments_ch = IBD_SEGMENTS.out.parent_segments_ch   // per parent: shared / not_shared
+        ibd_segments_ch    = IBD_SEGMENTS.out.ibd_segments_ch      // IBD0/1/2
+        ibd_summary_ch     = IBD_SEGMENTS.out.ibd_summary_ch       // genome fractions per pair
+}
+
+// Mild-child variants on a parental copy the severe sibling didn't inherit.
+workflow mild_haplotype_variants {
+
+    take :
+        family_json
+        variant_vcf      // tuple(childID, annotated master VCF)
+        parent_segments  // cohort.sib_parent_segments.tsv
+
+    main :
+        manifest = variant_vcf
+            .map { sid, vcf -> "${sid}\t${vcf.name}" }
+            .collectFile(name: 'mild_variants_vcf_manifest.tsv', newLine: true, sort: true)
+        MILD_HAPLOTYPE_VARIANTS(
+            family_json, manifest, variant_vcf.map { sid, vcf -> vcf }.collect(),
+            parent_segments, file("${params.bin}/mild_haplotype_variants.py")
+        )
+
+    emit :
+        variants_ch = MILD_HAPLOTYPE_VARIANTS.out.variants_ch
+        genes_ch    = MILD_HAPLOTYPE_VARIANTS.out.genes_ch
 }
 
 // Mild vs severe promoter methylation per parental haplotype. See

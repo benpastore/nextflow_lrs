@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Write population allele frequencies into every child's consolidated+snpEff
-VCF, once, before the modifier search -- so every later step reads AF from
+VCF, once, right after snpEff -- so every later step reads AF from
 INFO instead of re-scanning the population files itself.
 
   INFO/gnomAD_AF_NFE   gnomAD non-Finnish European AF (-gnomad_vcf, field AF_nfe):
