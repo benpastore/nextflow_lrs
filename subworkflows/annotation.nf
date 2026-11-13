@@ -7,6 +7,7 @@ nextflow.enable.dsl=2
 
 include { INDEX_REFERENCE as INDEX_HG38_REFERENCE } from '../modules/samtools/main.nf'
 include { alphagenome; alphamissense; variant_report } from './ont.nf'
+include { ANNOTATE_AF } from '../modules/af_annotate/main.nf'
 
 workflow candidate_annotation {
 
@@ -19,6 +20,7 @@ workflow candidate_annotation {
         samtools_fai_index
         repeat_pairs        // or file("NO_FILE")
         cnv_gene_cn         // or file("NO_FILE")
+        promoter_methylation // methylation_compare's cohort.promoter_methylation.tsv, or file("NO_FILE")
 
     main :
         hg38_vcf_ch = Channel.empty()
@@ -75,6 +77,33 @@ workflow candidate_annotation {
             repeat_pairs,
             cnv_gene_cn,
             alphagenome_gene_ch.ifEmpty(file("NO_FILE")),
-            alphagenome_api_gene_ch.ifEmpty(file("NO_FILE"))
+            alphagenome_api_gene_ch.ifEmpty(file("NO_FILE")),
+            promoter_methylation
         )
+}
+
+// Population AF written into every child's snpEff VCF once, before the
+// modifier search (see modules/af_annotate/main.nf).
+
+workflow allele_frequency {
+
+    take :
+        snpeff_vcf   // tuple(sampleID, snpEff VCF)
+        kg_af_vcf    // 1000 Genomes CHM13 EUR sites VCF, or file("NO_FILE")
+
+    main :
+        manifest = snpeff_vcf
+            .map { sid, vcf -> "${sid}\t${vcf.name}" }
+            .collectFile(name: 'af_vcf_manifest.tsv', newLine: true, sort: true)
+        ANNOTATE_AF(
+            manifest, snpeff_vcf.map { sid, vcf -> vcf }.collect(), kg_af_vcf,
+            file("${params.bin}/_modifier_common.py"),
+            file("${params.bin}/annotate_af.py")
+        )
+        af_vcf = ANNOTATE_AF.out.af_vcfs_ch
+            .flatMap { vcfs -> (vcfs instanceof List ? vcfs : [vcfs])
+                .collect { v -> tuple(v.name - '.snpeff.af.vcf.gz', v) } }
+
+    emit :
+        af_vcf = af_vcf   // tuple(sampleID, <sampleID>.snpeff.af.vcf.gz)
 }

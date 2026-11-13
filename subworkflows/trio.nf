@@ -96,5 +96,6 @@ workflow trio_family {
         trio_phasing      = trio_phasing_ch    // tuple(child, father, mother, father_vcf, mother_vcf)
         trio_sv           = trio_sv_ch         // tuple(child, father, mother, father_vcf, mother_vcf, father_sv_vcf, mother_sv_vcf)
         parent_vcf        = parent_vcf_ch      // tuple(parentID, clair3 vcf) -- for sibling haplotype sharing
+        parent_bam        = minimap2.out.bams  // tuple(parentID, bam, bai) -- reads for joint family phasing
         non_parent_ont_ch = non_parent_ont_ch  // tuple(sampleID, unal_bam, fastq) -- everyone except parents
 }

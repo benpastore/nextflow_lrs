@@ -27,7 +27,11 @@ Step 2 -- genetic models on those haplotypes
   dominant  (cohort.dominant_modifier.tsv)
       a variant whose category is mild_specific or de_novo. Variants on a
       haplotype shared with a severe sib are removed here -- this is the
-      "remove haplotypes common to mild and severe" step.
+      "remove haplotypes common to mild and severe" step. Then, gene level
+      (as in bin/dominant_modifier_consolidated.py): drop the gene if any
+      severe sib or concordant-severe sample carries ANY in-scope variant
+      in it -- one hit is enough under this model, so severe already
+      having one rules the gene out.
   recessive (cohort.recessive_modifier.tsv)
       the gene is biallelic in mild -- homozygous, or qualifying variants on
       BOTH the paternal and the maternal haplotype (or two hets in trans by
@@ -265,13 +269,26 @@ def run(args):
                     "category": h["category"], "ibd_vs_severe": h["ibd"],
                 })
 
-        # dominant: variants on mild-specific haplotypes (or de novo)
-        n_dom = 0
+        # dominant: variants on mild-specific haplotypes (or de novo), in
+        # genes where no severe sib / concordant-severe sample carries ANY
+        # in-scope variant. One hit is sufficient under this model, so a
+        # severe sample with its own hit in the gene rules the gene out --
+        # the haplotype filter alone can't do this, since a mild-specific
+        # haplotype is by definition one severe didn't inherit, while
+        # severe's other haplotype carries its own variants in the gene.
+        severe_genes = set()
+        for r in [records[s] for s in severes] + concordant_records:
+            for srec in r.values():
+                severe_genes.update(srec["genes"])
+        n_dom = n_dom_gene_severe = 0
         for vid, rec in recs.items():
             h = hap[vid]
             if h["category"] not in ("mild_specific", "de_novo"):
                 continue
             for g in rec["genes"]:
+                if g in severe_genes:
+                    n_dom_gene_severe += 1
+                    continue
                 key = (rec["chrom"], rec["pos"], rec["ref"], rec["alt"], g)
                 info = dom_pass.setdefault(key, {"vid": vid, "gene": g, "rec": rec, "hap": h,
                                                  "reason": h["category"], "samples": set()})
@@ -311,11 +328,13 @@ def run(args):
 
         logger.info(f"{mild} vs {', '.join(severes)}: {len(recs):,} in-scope variants; "
                     + ", ".join(f"{k}={n:,}" for k, n in cats.most_common()))
-        logger.info(f"{mild}: dominant {n_dom:,} variant x gene; recessive {len(mild_bi):,} biallelic gene(s), "
+        logger.info(f"{mild}: dominant {n_dom:,} variant x gene "
+                    f"(-{n_dom_gene_severe:,} in genes with a variant in severe); recessive {len(mild_bi):,} biallelic gene(s), "
                     f"-{n_sev_bi} biallelic in severe, -{n_ibd2} IBD2 with severe -> {n_rec}")
         funnel.append({"mild": mild, "severe_sibs": ",".join(severes), "in_scope_variants": len(recs),
                        **{f"cat_{k}": cats.get(k, 0) for k in
                           ("mild_specific", "de_novo", "shared_haplotype", "shared_allele", "unknown_haplotype")},
+                       "dominant_dropped_gene_in_severe": n_dom_gene_severe,
                        "dominant_variant_gene_rows": n_dom, "biallelic_genes": len(mild_bi),
                        "dropped_biallelic_in_severe": n_sev_bi, "dropped_ibd2": n_ibd2,
                        "recessive_genes": n_rec})
@@ -373,8 +392,13 @@ def run(args):
 
 
 def write_model(path, passing, gnomad, kg):
-    af = annotate_final_pass(passing, gnomad) if passing else {}
-    kgaf = annotate_final_pass(passing, kg) if passing else {}
+    # AF comes from the VCF's INFO (bin/annotate_af.py, run once before this
+    # step); a population file passed explicitly overrides it (legacy runs
+    # whose VCFs weren't AF-annotated)
+    af = annotate_final_pass(passing, gnomad) if passing and gnomad else \
+        {key: info["rec"].get("gnomad_af") for key, info in passing.items()}
+    kgaf = annotate_final_pass(passing, kg) if passing and kg else \
+        {key: info["rec"].get("kg_af") for key, info in passing.items()}
     rows = []
     for key, info in passing.items():
         rec, h = info["rec"], info["hap"]
@@ -405,8 +429,10 @@ def get_args():
     p.add_argument("-sib_parent_segments", required=True, help="sib_haplotype_sharing.py .sib_parent_segments.tsv")
     p.add_argument("-sv_merge_dist", type=int, default=500)
     p.add_argument("-min_occurrence", type=int, default=1)
-    p.add_argument("-gnomad_chm13_vcf", default=None)
-    p.add_argument("-kg_af_vcf", default=None)
+    p.add_argument("-gnomad_chm13_vcf", default=None,
+                   help="Only for VCFs without INFO/gnomAD_AF_NFE (annotate_af.py); otherwise AF is read from the VCF")
+    p.add_argument("-kg_af_vcf", default=None,
+                   help="Only for VCFs without INFO/KG_AF_EUR (annotate_af.py); otherwise AF is read from the VCF")
     p.add_argument("-output_prefix", default="cohort")
     return p.parse_args()
 

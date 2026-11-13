@@ -424,6 +424,79 @@ def _float(v):
         return None
 
 
+METH_COLS = ["meth_mild", "meth_severe", "meth_delta", "meth_pat_delta", "meth_pat_haplotype",
+             "meth_mat_delta", "meth_mat_haplotype", "meth_flag"]
+
+
+def read_methylation(path):
+    """{(mild, severe, gene): row} from methylation_compare.py's
+    cohort.promoter_methylation.tsv. A gene with several promoter loci
+    keeps the one with the largest |delta| on any side."""
+    def strength(r):
+        return max([abs(x) for x in (_float(r.get(c)) for c in ("delta", "pat_delta", "mat_delta")) if x is not None]
+                   or [-1])
+
+    out = {}
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            key = (row["MILD_SAMPLE"], row["SEVERE_SAMPLE"], row["GENE"])
+            if key not in out or strength(row) > strength(out[key]):
+                out[key] = row
+    return out
+
+
+def methylation_for(meth, mild, sev, gene):
+    """The pair's promoter-methylation row for a gene; snpEff multi-gene
+    names (A&B) take the component with the largest |delta|."""
+    rows = [meth[(mild, sev, g)] for g in gene.split("&") if (mild, sev, g) in meth]
+    if not rows:
+        return {c: "" for c in METH_COLS}
+    best = max(rows, key=lambda r: max([abs(x) for x in (_float(r.get(c)) for c in ("delta", "pat_delta", "mat_delta"))
+                                        if x is not None] or [-1]))
+    return {"meth_mild": best["mild_meth"], "meth_severe": best["severe_meth"], "meth_delta": best["delta"],
+            "meth_pat_delta": best["pat_delta"], "meth_pat_haplotype": best["pat_haplotype"],
+            "meth_mat_delta": best["mat_delta"], "meth_mat_haplotype": best["mat_haplotype"],
+            "meth_flag": best["meth_flag"]}
+
+
+SLIM_COLS = ["MILD_SAMPLE", "SEVERE_SAMPLE", "GENE", "row_source", "models", "n_variants", "n_mild_with_gene",
+             "alphagenome_gene", "alphagenome_variant_max", "ag_other_impacted_genes_top3",
+             "alphamissense", "min_pop_AF", "cnv", "repeat_flag", "promoter_methylation", "variants"]
+
+
+def _ag_compact(signed, scorer, tissue):
+    """'+0.998 RNA_SEQ/<tissue>' or ''."""
+    q = _float(signed)
+    return f"{q:+.3f} {scorer}/{tissue}" if q is not None else ""
+
+
+def slim_row(r):
+    """Digestible view of one full sib-pair row (the full file keeps the detail)."""
+    am = ""
+    if r["max_alphamissense_pathogenicity"]:
+        am = f"{_float(r['max_alphamissense_pathogenicity']):.3f} {r['max_alphamissense_class']}"
+        if r["max_alphamissense_protein_variant"]:
+            am += f" {r['max_alphamissense_protein_variant']}"
+    afs = [x for x in (_float(r["min_gnomad_AF_NFE"]), _float(r["min_kg_AF_EUR"])) if x is not None]
+    meth = r.get("meth_flag") or (f"delta{_float(r['meth_delta']):+.2f}" if r.get("meth_delta") else "")
+    return {
+        "MILD_SAMPLE": r["MILD_SAMPLE"], "SEVERE_SAMPLE": r["SEVERE_SAMPLE"], "GENE": r["GENE"],
+        "row_source": r["row_source"], "models": r["models"], "n_variants": r["n_variants"],
+        "n_mild_with_gene": r["n_mild_with_gene"],
+        "alphagenome_gene": _ag_compact(r["ag_gene_max_signed"], r["ag_gene_max_scorer"], r["ag_gene_max_tissue"]),
+        "alphagenome_variant_max": _ag_compact(r["variant_ag_max_signed"], r["variant_ag_max_scorer"],
+                                               r["variant_ag_max_tissue"]),
+        "ag_other_impacted_genes_top3": ";".join(
+            g.split("(")[0] for g in r["ag_other_impacted_genes"].split(";")[:3] if g),
+        "alphamissense": am,
+        "min_pop_AF": f"{min(afs):.3g}" if afs else "",
+        "cnv": f"mild {r['mild_cn']} / severe {r['severe_cn']}" if r["cnv_flag"] else "",
+        "repeat_flag": r["repeat_flag"],
+        "promoter_methylation": meth,
+        "variants": r["variants"],
+    }
+
+
 def read_alphagenome_genes(paths):
     """{VID: [per-gene row]} from run_alphagenome.py -gene_output TSVs; the
     first table (local) wins per VID, later ones (API) fill VIDs it lacks --
@@ -440,7 +513,7 @@ def read_alphagenome_genes(paths):
 
 
 def write_sibpair_gene_summary(path, gene_rows, family_json, report_rows, repeat_flags, gene_cn,
-                               ag_genes=None, ag_threshold=0.99):
+                               ag_genes=None, ag_threshold=0.99, meth=None, slim_path=""):
     """gene_cn: read_gene_cn() output, or None when cnv_compare didn't run
     (CN columns then left empty rather than claiming CN 2).
     ag_genes: read_alphagenome_genes() output, or None when AlphaGenome's
@@ -508,7 +581,9 @@ def write_sibpair_gene_summary(path, gene_rows, family_json, report_rows, repeat
             "max_alphamissense_pathogenicity", "max_alphamissense_class", "max_alphamissense_protein_variant",
             "max_alphamissense_variant",
             "min_gnomad_AF_NFE", "min_kg_AF_EUR", "n_variants_no_AF", "worst_snpeff_impact",
-            "repeat_flag", "n_repeat_loci", "repeat_detail", "mild_cn", "severe_cn", "cnv_flag", "variants"]
+            "repeat_flag", "n_repeat_loci", "repeat_detail", "mild_cn", "severe_cn", "cnv_flag",
+            # promoter methylation (methylation_compare.py), combined + per parental haplotype
+            *METH_COLS, "variants"]
     rows = []
     for (mild, sev, gene), b in buckets.items():
         vrows = [report_rows[k] for k in sorted(b["variants"]) if k in report_rows]
@@ -584,6 +659,7 @@ def write_sibpair_gene_summary(path, gene_rows, family_json, report_rows, repeat
             "worst_snpeff_impact": worst,
             "repeat_flag": ",".join(rep_dirs), "n_repeat_loci": len(rep), "repeat_detail": rep_detail,
             "mild_cn": mild_cn, "severe_cn": severe_cn, "cnv_flag": cnv_flag,
+            **(methylation_for(meth, mild, sev, gene) if meth else {c: "" for c in METH_COLS}),
             "variants": ",".join(r["VID"] for r in vrows),
         })
 
@@ -600,6 +676,12 @@ def write_sibpair_gene_summary(path, gene_rows, family_json, report_rows, repeat
         writer = csv.DictWriter(out, fieldnames=cols, delimiter="\t")
         writer.writeheader()
         writer.writerows(rows)
+    if slim_path:
+        with open(slim_path, "w", newline="") as out:
+            writer = csv.DictWriter(out, fieldnames=SLIM_COLS, delimiter="\t")
+            writer.writeheader()
+            writer.writerows(slim_row(r) for r in rows)
+        logger.info(f"Slim sibling-pair gene summary -> {slim_path}")
     n_rep = sum(1 for r in rows if r["repeat_flag"])
     n_cnv = sum(1 for r in rows if r["cnv_flag"])
     n_target = sum(1 for r in rows if r["row_source"] == "alphagenome_target")
@@ -642,6 +724,11 @@ def main():
     p.add_argument("-output", required=True)
     p.add_argument("-funnel_output", required=True, help="Per-step variant counts TSV")
     p.add_argument("-sibpair_output", default="", help="Per (mild, severe sibling, gene) summary TSV")
+    p.add_argument("-sibpair_slim_output", default="",
+                   help="Compact version of -sibpair_output (key AlphaGenome / AlphaMissense / AF / CNV / "
+                        "repeat / methylation columns only)")
+    p.add_argument("-methylation_tsv", default="",
+                   help="methylation_compare.py's cohort.promoter_methylation.tsv (optional)")
     args = p.parse_args()
 
     variants, n_rows = read_modifier_tsvs([("recessive", args.recessive_tsv), ("dominant", args.dominant_tsv)])
@@ -751,6 +838,8 @@ def main():
             read_alphagenome_genes([p for p in (args.alphagenome_gene_tsv, args.alphagenome_api_gene_tsv)
                                     if present(p)]),
             args.alphagenome_threshold,
+            read_methylation(args.methylation_tsv) if present(args.methylation_tsv) else None,
+            args.sibpair_slim_output,
         )
 
     funnel = build_funnel(

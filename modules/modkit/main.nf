@@ -75,8 +75,18 @@ process MODKIT_PILEUP {
         tuple val(sampleID), val(bam), val(bai)
         tuple val(ref), val(ref_fai)
 
+    //
+    // CpG-only, strands combined (--cpg --combine-strands): one row per CpG
+    // per mod code. With --partition-tag, modkit writes a DIRECTORY of
+    // bedMethyl files, one per HP value (<prefix>_1.bed, <prefix>_2.bed,
+    // <prefix>_ungrouped.bed); they're renamed to fixed names here so
+    // downstream (METHYLATION_COMPARE) can rely on them. A partition with
+    // no reads gets an empty file.
     output:
-        tuple val(sampleID), path("${sampleID}*.bed.gz"), emit: modkit_ch
+        tuple val(sampleID),
+            path("${sampleID}.modkit.hp1.bed.gz"),
+            path("${sampleID}.modkit.hp2.bed.gz"),
+            path("${sampleID}.modkit.ungrouped.bed.gz"), emit: modkit_ch
 
     script:
     """
@@ -85,14 +95,31 @@ process MODKIT_PILEUP {
 
     modkit pileup \\
         ${bam} \\
-        ${sampleID}.modkit.bed \\
+        modkit_out \\
         --ref ${ref} \\
+        --cpg \\
+        --combine-strands \\
         --partition-tag HP \\
+        --prefix ${sampleID} \\
         --threads ${task.cpus} \\
         --log-filepath ${sampleID}.modkit.log
 
-    for f in ${sampleID}.modkit*.bed; do
-        bgzip "\$f"
+    if [ ! -d modkit_out ]; then
+        echo "modkit did not write a partitioned output directory (modkit_out)" >&2
+        exit 1
+    fi
+    for f in modkit_out/*.bed; do
+        [ -e "\$f" ] || continue
+        b=\$(basename "\$f" .bed)
+        case "\${b##*_}" in
+            1) out=hp1 ;;
+            2) out=hp2 ;;
+            *) out=ungrouped ;;
+        esac
+        gzip -c "\$f" > ${sampleID}.modkit.\$out.bed.gz
+    done
+    for out in hp1 hp2 ungrouped; do
+        [ -e ${sampleID}.modkit.\$out.bed.gz ] || printf '' | gzip -c > ${sampleID}.modkit.\$out.bed.gz
     done
     """
 }

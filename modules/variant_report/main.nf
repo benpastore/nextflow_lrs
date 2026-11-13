@@ -9,7 +9,7 @@
 process VARIANT_REPORT {
 
     label 'recessive_modifier'
-    publishDir "${params.results}/09_variant_report", mode: params.publish_mode
+    publishDir "${params.results}/10_variant_report", mode: params.publish_mode
 
     input:
         path(recessive_tsv)
@@ -27,6 +27,7 @@ process VARIANT_REPORT {
         path(cnv_gene_cn_tsv, stageAs: 'cnv/*')
         path(alphagenome_gene_tsv, stageAs: 'alphagenome_local_genes/*')
         path(alphagenome_api_gene_tsv, stageAs: 'alphagenome_api_genes/*')
+        path(promoter_methylation_tsv, stageAs: 'methylation/*')
         path(common_script)
         path(script)
 
@@ -34,6 +35,7 @@ process VARIANT_REPORT {
         path("cohort.variant_report.tsv"), emit: variant_report_ch
         path("cohort.variant_funnel.tsv"), emit: variant_funnel_ch
         path("cohort.sibpair_gene_summary.tsv"), emit: sibpair_gene_summary_ch
+        path("cohort.sibpair_gene_summary.slim.tsv"), emit: sibpair_gene_summary_slim_ch
 
     script:
     """
@@ -59,9 +61,11 @@ process VARIANT_REPORT {
         -cnv_gene_cn_tsv ${cnv_gene_cn_tsv} \\
         -alphagenome_gene_tsv ${alphagenome_gene_tsv} \\
         -alphagenome_api_gene_tsv ${alphagenome_api_gene_tsv} \\
+        -methylation_tsv ${promoter_methylation_tsv} \\
         -alphagenome_threshold ${params.alphagenome_quantile_threshold ?: 0.99} \\
         -output cohort.variant_report.tsv \\
         -funnel_output cohort.variant_funnel.tsv \\
-        -sibpair_output cohort.sibpair_gene_summary.tsv
+        -sibpair_output cohort.sibpair_gene_summary.tsv \\
+        -sibpair_slim_output cohort.sibpair_gene_summary.slim.tsv
     """
 }

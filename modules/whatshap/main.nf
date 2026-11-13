@@ -63,107 +63,157 @@ process WHATSHAP_HAPLOTAG {
     """
 }
 
-process WHATSHAP_PHASE_TRIO {
+
+process WHATSHAP_PHASE_FAMILY {
 
     label 'whatshap'
-    tag "${child}"
-    publishDir "${params.results}/06_variants/whatshap_trio_phased", mode: params.publish_mode
+    tag "${family}"
+    publishDir "${params.results}/06_variants/whatshap_family_phased", mode: params.publish_mode
 
-    // Trio-aware re-phasing of the child's small variants (SNV + indel),
-    // starting from the longphase_sv VCF. With --run_trio_analysis this
-    // output REPLACES longphase_sv as the child's phased small-variant VCF
-    // for consolidation and the haplotype analysis (see main.nf stage 5).
-    // Parents contribute genotype-only Mendelian constraints from their own
-    // ONT Clair3 VCFs (subworkflows/trio.nf), merged with the child into one
-    // multi-sample VCF -- no parental BAM is needed. Sniffles SVs are not
-    // included: whatshap only phases SNVs/indels, not symbolic SVs.
-    // Outputs: <child>.trio.whatshapphase.vcf.gz (child only, same name as
-    // before) and <child>.trio.family.whatshapphase.vcf.gz (all three).
+    // Joint pedigree phasing of a whole family -- every child + both parents
+    // in ONE whatshap run (one .ped, one multi-sample VCF, every member's
+    // reads), then split back into one phased VCF per child. With
+    // --run_trio_analysis the per-child output REPLACES longphase_sv as the
+    // child's phased small-variant VCF for consolidation and the haplotype
+    // analysis (see main.nf stage 5).
+    //
+    // Compared with phasing each child as its own trio, the parents are
+    // themselves phased (their reads + transmission to every child), every
+    // child is phased against the same parental haplotypes, and a genotype
+    // that's Mendelian-inconsistent in one child is judged against all of
+    // them. Parents' reads are optional (params.whatshap_family_parent_reads);
+    // without them the parents contribute genotypes only.
+    //
+    // Genotypes: children's longphase_sv VCFs + parents' Clair3 VCFs, merged.
+    // Sniffles SVs aren't phased (whatshap phases SNVs/indels only).
+    // Run per chromosome in parallel inside this job
+    // (params.whatshap_family_jobs at a time), then concatenated.
+    //
+    // Outputs: <child>.trio.whatshapphase.vcf.gz per child (child column,
+    // sites where the child carries ALT -- same name/content contract as the
+    // old per-child trio step) and <family>.family.whatshapphase.vcf.gz.
     input:
         tuple val(ref), val(ref_fai)
-        tuple val(child), val(father), val(mother), val(child_vcf), val(child_bam), val(child_bai), val(father_vcf), val(mother_vcf)
+        tuple val(family), val(father), val(mother),
+            val(father_vcf), val(mother_vcf),
+            val(father_bam), val(mother_bam),
+            val(children), val(child_vcfs), val(child_bams)
 
     output:
-        tuple val(child), path("${child}.trio.whatshapphase.vcf.gz"), path("${child}.trio.whatshapphase.vcf.gz.tbi"), emit : whatshap_phase_trio_ch
-        tuple val(child), path("${child}.trio.family.whatshapphase.vcf.gz"), path("${child}.trio.family.whatshapphase.vcf.gz.tbi"), emit : whatshap_phase_trio_family_ch
+        tuple path("*.trio.whatshapphase.vcf.gz"), path("*.trio.whatshapphase.vcf.gz.tbi"), emit : child_vcfs_ch
+        tuple val(family), path("${family}.family.whatshapphase.vcf.gz"), path("${family}.family.whatshapphase.vcf.gz.tbi"), emit : family_vcf_ch
 
     script:
+    def kids     = children instanceof List ? children : [children]
+    def kid_vcfs = child_vcfs instanceof List ? child_vcfs : [child_vcfs]
+    def kid_bams = child_bams instanceof List ? child_bams : [child_bams]
+    def ped_rows = kids.collect { c -> "${family}\\t${c}\\t${father}\\t${mother}\\t0\\t0" }.join("\\n")
+    // "sample:vcf" / "sample:bam" pairs, children first
+    def vcf_pairs = ([kids, kid_vcfs].transpose().collect { c, v -> "${c}:${v}" } +
+                     ["${father}:${father_vcf}", "${mother}:${mother_vcf}"]).join(' ')
+    def bam_pairs = ([kids, kid_bams].transpose().collect { c, b -> "${c}:${b}" } +
+                     (father_bam != 'NONE' ? ["${father}:${father_bam}"] : []) +
+                     (mother_bam != 'NONE' ? ["${mother}:${mother_bam}"] : [])).join(' ')
+    def n_jobs = Math.max(1, Math.min(task.cpus as int, (params.whatshap_family_jobs ?: 6) as int))
     """
     #!/bin/bash
     set -euo pipefail
 
-    printf "%s\\t%s\\t%s\\t%s\\t0\\t0\\n" "${child}_family" "${child}" "${father}" "${mother}" > ${child}.ped
-    printf "%s\\t%s\\t0\\t0\\t1\\t0\\n" "${child}_family" "${father}" >> ${child}.ped
-    printf "%s\\t%s\\t0\\t0\\t2\\t0\\n" "${child}_family" "${mother}" >> ${child}.ped
+    # 1) pedigree: every child of this father/mother pair
+    printf "${ped_rows}\\n" > ${family}.ped
+    printf "%s\\t%s\\t0\\t0\\t1\\t0\\n" "${family}" "${father}" >> ${family}.ped
+    printf "%s\\t%s\\t0\\t0\\t2\\t0\\n" "${family}" "${mother}" >> ${family}.ped
 
-    # 1) ONE multi-sample VCF with child + father + mother. In pedigree mode
-    #    whatshap only phases the genotypes in its FIRST positional VCF --
-    #    every further positional file (VCF or BAM) is read as phasing
-    #    EVIDENCE, not as genotypes, so passing the parents' VCFs separately
-    #    (as this step used to) gave whatshap no parental genotypes at all and
-    #    nothing got phased. Sample columns must match the .ped IDs (CLAIR3
-    #    --sample_name). A site absent from a parent's VCF stays missing
-    #    (unknown), not assumed hom-ref.
-    stage_vcf() {  # stage_vcf <src> <name>: local symlink + index
-        ln -sf "\$1" "\$2"
-        if [ -e "\$1.tbi" ]; then ln -sf "\$1.tbi" "\$2.tbi"; else bcftools index -f -t "\$2"; fi
-    }
-    stage_vcf ${child_vcf}  child.vcf.gz
-    stage_vcf ${father_vcf} father.vcf.gz
-    stage_vcf ${mother_vcf} mother.vcf.gz
-    for pair in "child.vcf.gz:${child}" "father.vcf.gz:${father}" "mother.vcf.gz:${mother}"; do
-        f=\${pair%%:*}; want=\${pair#*:}
-        got=\$(bcftools query -l "\$f" | tr '\\n' ',' | sed 's/,\$//')
-        if [ "\$got" != "\$want" ]; then
-            echo "[WHATSHAP_PHASE_TRIO] \$f sample column is '\$got', expected '\$want' (family.json ID)" >&2
+    # 2) ONE multi-sample VCF (whatshap's pedigree mode phases only the
+    #    genotypes in its first positional VCF; further positional files are
+    #    read as phasing evidence). Sample columns must match the .ped IDs.
+    #    A site absent from a member's VCF stays missing (unknown).
+    merge_list=()
+    for pair in ${vcf_pairs}; do
+        s=\${pair%%:*}; f=\${pair#*:}
+        ln -sf "\$f" "gt_\$s.vcf.gz"
+        if [ -e "\$f.tbi" ]; then ln -sf "\$f.tbi" "gt_\$s.vcf.gz.tbi"; else bcftools index -f -t "gt_\$s.vcf.gz"; fi
+        got=\$(bcftools query -l "gt_\$s.vcf.gz" | tr '\\n' ',' | sed 's/,\$//')
+        if [ "\$got" != "\$s" ]; then
+            echo "[WHATSHAP_PHASE_FAMILY] \$f sample column is '\$got', expected '\$s' (family.json ID)" >&2
             exit 1
         fi
+        merge_list+=("gt_\$s.vcf.gz")
     done
-    bcftools merge --threads ${task.cpus} -Oz -o family.vcf.gz child.vcf.gz father.vcf.gz mother.vcf.gz
+    bcftools merge --threads ${task.cpus} -Oz -o family.vcf.gz "\${merge_list[@]}"
     bcftools index -f -t family.vcf.gz
 
-    # 2) reads must carry a read group whose SM is the child: pedigree mode
-    #    assigns reads to samples by @RG SM (--ignore-read-groups is not
-    #    allowed with --ped). The alignment step adds no @RG, so add one when
-    #    the BAM lacks a matching SM -- otherwise no reads count for the child.
-    #    pysam (always present -- whatshap depends on it) runs the samtools
-    #    commands, so this doesn't rely on a samtools binary in the image.
-    if python3 -c "
+    # 3) reads: pedigree mode assigns reads to samples by @RG SM, so every
+    #    BAM needs a read group whose SM is its sample; add one when missing
+    bams=()
+    for pair in ${bam_pairs}; do
+        s=\${pair%%:*}; b=\${pair#*:}
+        if python3 -c "
 import pysam, sys
-rgs = pysam.AlignmentFile('${child_bam}').header.to_dict().get('RG', [])
-sys.exit(0 if any(rg.get('SM') == '${child}' for rg in rgs) else 1)
+rgs = pysam.AlignmentFile('\$b').header.to_dict().get('RG', [])
+sys.exit(0 if any(rg.get('SM') == '\$s' for rg in rgs) else 1)
 "; then
-        reads_bam=${child_bam}
-    else
-        echo "[WHATSHAP_PHASE_TRIO] ${child_bam} has no @RG SM:${child} -- adding one" >&2
-        python3 -c "
+            bams+=("\$b")
+        else
+            echo "[WHATSHAP_PHASE_FAMILY] \$b has no @RG SM:\$s -- adding one" >&2
+            python3 -c "
 import pysam
-pysam.addreplacerg('-@', '${task.cpus}', '-r', 'ID:${child}', '-r', 'SM:${child}', '-m', 'overwrite_all',
-                   '-o', '${child}.rg.bam', '${child_bam}', catch_stdout=False)
-pysam.index('-@', '${task.cpus}', '${child}.rg.bam')
+pysam.addreplacerg('-@', '${task.cpus}', '-r', 'ID:\$s', '-r', 'SM:\$s', '-m', 'overwrite_all',
+                   '-o', 'rg_\$s.bam', '\$b', catch_stdout=False)
+pysam.index('-@', '${task.cpus}', 'rg_\$s.bam')
 "
-        reads_bam=${child}.rg.bam
-    fi
+            bams+=("rg_\$s.bam")
+        fi
+    done
 
-    whatshap phase \\
-      --ped ${child}.ped \\
-      --reference ${ref} \\
-      --output ${child}.trio.family.whatshapphase.vcf.gz \\
-      family.vcf.gz \\
-      \$reads_bam
+    # 4) phase per chromosome, ${n_jobs} at a time. Each chromosome's input
+    #    is subset first so its output holds only that chromosome.
+    mkdir -p chunks
+    phase_chrom() {
+        c=\$1
+        bcftools view -r "\$c" -Oz -o "chunks/in.\$c.vcf.gz" family.vcf.gz
+        bcftools index -f -t "chunks/in.\$c.vcf.gz"
+        whatshap phase \\
+          --ped ${family}.ped \\
+          --reference ${ref} \\
+          --chromosome "\$c" \\
+          --output "chunks/out.\$c.vcf.gz" \\
+          "chunks/in.\$c.vcf.gz" \\
+          "\${bams[@]}" > "chunks/\$c.log" 2>&1 \\
+          && touch "chunks/\$c.done"
+    }
+    chroms=\$(bcftools index -s family.vcf.gz | cut -f1)
+    for c in \$chroms; do
+        while [ "\$(jobs -rp | wc -l)" -ge ${n_jobs} ]; do sleep 5; done
+        phase_chrom "\$c" &
+    done
+    wait || true
+    failed=0
+    for c in \$chroms; do
+        if [ ! -e "chunks/\$c.done" ]; then
+            echo "[WHATSHAP_PHASE_FAMILY] whatshap failed on \$c:" >&2
+            tail -20 "chunks/\$c.log" >&2 || true
+            failed=1
+        fi
+    done
+    [ \$failed -eq 0 ] || exit 1
 
-    bcftools index -f -t ${child}.trio.family.whatshapphase.vcf.gz
-    # child-only, and only sites where the child carries ALT (the family VCF
-    # also holds parent-only sites) -- this is the child's phased
-    # small-variant VCF for consolidation + haplotype analysis downstream
-    bcftools view -s ${child} ${child}.trio.family.whatshapphase.vcf.gz \\
-        | bcftools view -i 'GT="alt"' -Oz -o ${child}.trio.whatshapphase.vcf.gz
-    bcftools index -f -t ${child}.trio.whatshapphase.vcf.gz
-    rm -f ${child}.rg.bam ${child}.rg.bam.bai
+    bcftools concat -Oz -o ${family}.family.whatshapphase.vcf.gz \$(for c in \$chroms; do echo "chunks/out.\$c.vcf.gz"; done)
+    bcftools index -f -t ${family}.family.whatshapphase.vcf.gz
 
-    # 3) say how much actually got phased -- a silent all-unphased output is
-    #    exactly how the previous version failed
-    bcftools query -i 'TYPE="snp" && GT="het"' -f '[%GT]\\n' ${child}.trio.whatshapphase.vcf.gz \\
-        | awk '{ if (\$1 ~ /\\|/) p++; n++ } END { printf "[WHATSHAP_PHASE_TRIO] ${child}: %d / %d het SNVs phased (%.1f%%)\\n", p, n, n ? 100*p/n : 0 }' >&2
+    # 5) split: child column only, sites where the child carries ALT
+    for child in ${kids.join(' ')}; do
+        bcftools view -s "\$child" ${family}.family.whatshapphase.vcf.gz \\
+            | bcftools view -i 'GT="alt"' -Oz -o "\$child.trio.whatshapphase.vcf.gz"
+        bcftools index -f -t "\$child.trio.whatshapphase.vcf.gz"
+    done
+
+    # 6) how much got phased, per member
+    for s in ${kids.join(' ')} ${father} ${mother}; do
+        bcftools view -s "\$s" ${family}.family.whatshapphase.vcf.gz \\
+            | bcftools query -i 'TYPE="snp" && GT="het"' -f '[%GT]\\n' \\
+            | awk -v s="\$s" '{ if (\$1 ~ /\\|/) p++; n++ } END { printf "[WHATSHAP_PHASE_FAMILY] %s: %d / %d het SNVs phased (%.1f%%)\\n", s, p, n, n ? 100*p/n : 0 }' >&2
+    done
+    rm -rf chunks rg_*.bam rg_*.bam.bai
     """
 }

@@ -258,6 +258,14 @@ def get_info_field(info_str, key):
     return None
 
 
+def _info_float(info_str, key):
+    v = get_info_field(info_str, key)
+    try:
+        return float(v) if v is not None else None
+    except ValueError:
+        return None
+
+
 def classify_gt(gt):
     """Return 'homo', 'het', or None (not called / ref-only) for a GT string."""
     if not gt or gt in ('.', './.', '.|.'):
@@ -367,6 +375,10 @@ def parse_consolidated_vcf(path):
                 "origin": get_info_field(info, "ORIGIN") or "unknown",
                 "origin_source": get_info_field(info, "ORIGIN_SOURCE") or "",
                 "de_novo": "DE_NOVO" in info.split(";"),
+                # population AF written by bin/annotate_af.py (None = not in
+                # that source, or the VCF wasn't AF-annotated)
+                "gnomad_af": _info_float(info, "gnomAD_AF_NFE"),
+                "kg_af": _info_float(info, "KG_AF_EUR"),
             }
             kept += 1
 

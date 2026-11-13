@@ -60,7 +60,6 @@ process HAPLOTYPE_MODIFIER {
         path(vcf_manifest)                              // childID<TAB>snpEff VCF name
         path(vcfs)
         path(parent_segments)
-        path(kg_af_vcf, stageAs: 'kg_af/*')
         path(common_script)
         path(script)
 
@@ -72,8 +71,8 @@ process HAPLOTYPE_MODIFIER {
         path("cohort.haplotype_variants.tsv"), emit: haplotype_variants_ch
         path("cohort.haplotype_funnel.tsv"), emit: haplotype_funnel_ch
 
+    // gnomAD / 1000 Genomes AF are read from the VCFs' INFO (ANNOTATE_AF)
     script:
-    def kg_arg = kg_af_vcf.toString().tokenize('/')[-1] != 'NO_FILE' ? "-kg_af_vcf ${kg_af_vcf}" : ''
     """
     #!/bin/bash
     set -euo pipefail
@@ -87,8 +86,6 @@ process HAPLOTYPE_MODIFIER {
         -vcf_manifest ${vcf_manifest} \\
         -sib_parent_segments ${parent_segments} \\
         -sv_merge_dist ${params.recessive_modifier_sv_merge_dist ?: 500} \\
-        ${params.gnomad_chm13_vcf ? "-gnomad_chm13_vcf ${params.gnomad_chm13_vcf}" : ""} \\
-        ${kg_arg} \\
         -output_prefix cohort
     """
 }

@@ -21,7 +21,7 @@ Flow (each stage is a numbered section in the workflow below):
   9. report       AlphaGenome / AlphaMissense / variant report
 
   With parents:
-    WHATSHAP_PHASE_TRIO --+
+    WHATSHAP_PHASE_FAMILY +
                           +-> CONSOLIDATE (INFO/ORIGIN) -> SNPEFF -> SIB_HAPLOTYPE_SHARING
     SV_TRIO_ORIGIN -------+                                       -> HAPLOTYPE_MODIFIER -> AG/AM
   (assembly: off by default, --assemble_genome true; see subworkflows/assembly.nf)
@@ -66,7 +66,9 @@ def helpMessage() {
 
     Optional branches:
     --assemble_genome [bool]            hifiasm assembly -> dipcall/hapdiff (default: false)
-    --run_methylation [bool]            Raw-read alignment + modkit per haplotype (default: false)
+    --run_methylation [bool]            Raw-read alignment + modkit per haplotype (default: false); with
+                                         --run_trio_analysis also mild vs severe promoter methylation per
+                                         parental haplotype (<results>/09_methylation_compare)
     --run_snpeff [bool]                 snpEff annotation; required for the modifier search (default: true)
     --run_cnv_compare / --run_repeat_compare [bool]   mild vs severe Spectre / Straglr comparison
     --run_alphagenome / --run_alphagenome_api [bool]  AlphaGenome scoring of modifier candidates
@@ -95,7 +97,7 @@ include { MERGE_INPUTS; SAMTOOLS_CONVERT_BAM_TO_FASTQ; INDEX_REFERENCE } from '.
 include { DORADO_TRIM } from '../../modules/dorado/main.nf'
 include { NANOPLOT_RAW } from '../../modules/nanoplot/main.nf'
 include { READ_LENGTH_PLOT } from '../../modules/read_length_plot/main.nf'
-include { WHATSHAP_PHASE_TRIO } from '../../modules/whatshap/main.nf'
+include { WHATSHAP_PHASE_FAMILY } from '../../modules/whatshap/main.nf'
 include { SV_TRIO_ORIGIN } from '../../modules/sv_trio_origin/main.nf'
 
 /* subworkflows */
@@ -107,8 +109,8 @@ include { minimap2_index; minimap2; minimap2_methylation; clair3; longphase; sni
           straglr; haplotype_annotate_straglr; spectre; haplotype_annotate_spectre; cnv_compare;
           repeat_compare; paraphase; methylation_haplotag; modkit; consolidate_variants; snpeff;
           kg_af; recessive_modifier } from '../../subworkflows/ont.nf'
-include { haplotype_analysis } from '../../subworkflows/haplotypes.nf'
-include { candidate_annotation } from '../../subworkflows/annotation.nf'
+include { haplotype_analysis; methylation_compare } from '../../subworkflows/haplotypes.nf'
+include { candidate_annotation; allele_frequency } from '../../subworkflows/annotation.nf'
 
 workflow parse_design {
     take :
@@ -141,6 +143,12 @@ workflow {
     run_trio = params.run_trio_analysis && params.family_json
     if (params.run_trio_analysis && !params.family_json) {
         log.warn "--run_trio_analysis is set but --family_json is not -- running without trio analysis"
+    }
+    if (!params.gnomad_chm13_vcf) {
+        log.warn "params.gnomad_chm13_vcf not set -- no gnomAD allele frequencies"
+    }
+    if (!params.kg_af_vcf && !params.kg_chm13_vcfs) {
+        log.info "1000 Genomes CHM13 AF not configured (kg_chm13_vcfs / kg_af_vcf) -- allele frequencies come from gnomAD only"
     }
 
     // reference indexes: minimap2 .mmi (alignment) and samtools .fai
@@ -222,7 +230,7 @@ workflow {
         modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
     }
 
-    // mild vs severe CNV / repeat comparison (<results>/10_cnv_repeat_compare);
+    // mild vs severe CNV / repeat comparison (<results>/09_cnv_repeat_compare);
     // per-pair outputs also feed the final report
     repeat_pairs_ch = Channel.value(file("NO_FILE"))
     cnv_gene_cn_ch = Channel.value(file("NO_FILE"))
@@ -255,11 +263,29 @@ workflow {
         parent_pair_ch = trio_family.out.trio_phasing
             .map { child, father, mother, father_vcf, mother_vcf -> tuple(child, [father_vcf, mother_vcf]) }
 
-        WHATSHAP_PHASE_TRIO( samtools_fai_index,
-            phased_vcf_ch.join( phased_bam_ch ).join( trio_family.out.trio_phasing )
-                .map { sid, vcf, tbi, bam, bai, father, mother, father_vcf, mother_vcf ->
-                    tuple(sid, father, mother, vcf, bam, bai, father_vcf, mother_vcf) } )
-        small_vcf_ch = WHATSHAP_PHASE_TRIO.out.whatshap_phase_trio_ch      // (child, vcf, tbi)
+        // ONE WhatsHap pedigree job per family (all children of a
+        // father/mother pair + both parents, with everyone's reads), split
+        // back into one phased VCF per child
+        parent_bam_map = trio_family.out.parent_bam
+            .toList()
+            .map { list -> list.collectEntries { pid, bam, bai -> [(pid): bam] } }
+        family_phasing_in = phased_vcf_ch.join( phased_bam_ch ).join( trio_family.out.trio_phasing )
+            .map { sid, vcf, tbi, bam, bai, father, mother, father_vcf, mother_vcf ->
+                tuple("${father}_${mother}".toString(), father, mother, father_vcf, mother_vcf, sid, vcf, bam) }
+            .groupTuple( by: 0 )
+            .combine( parent_bam_map )
+            .map { fam, fathers, mothers, fvcfs, mvcfs, sids, vcfs, bams, pbam ->
+                def use_reads = params.whatshap_family_parent_reads
+                tuple(fam, fathers[0], mothers[0], fvcfs[0], mvcfs[0],
+                      use_reads && pbam[fathers[0]] ? pbam[fathers[0]] : 'NONE',
+                      use_reads && pbam[mothers[0]] ? pbam[mothers[0]] : 'NONE',
+                      sids, vcfs, bams) }
+        WHATSHAP_PHASE_FAMILY( samtools_fai_index, family_phasing_in )
+        small_vcf_ch = WHATSHAP_PHASE_FAMILY.out.child_vcfs_ch       // -> (child, vcf, tbi)
+            .flatMap { vcfs, tbis ->
+                def vl = vcfs instanceof List ? vcfs : [vcfs]
+                def tl = tbis instanceof List ? tbis : [tbis]
+                vl.collect { v -> tuple(v.name - '.trio.whatshapphase.vcf.gz', v, tl.find { it.name == v.name + '.tbi' }) } }
 
         // SVs: WhatsHap can't phase them, so their parent of origin comes from
         // Sniffles' own phase tags (assigned on the round-1 longphase BAM, hence
@@ -273,14 +299,28 @@ workflow {
         sv_origin_ch = SV_TRIO_ORIGIN.out.sv_trio_origin_ch.map { sid, tsv, blocks -> tuple(sid, tsv) }
     }
 
-    ////////////////// 6. CONSOLIDATE CALLERS + SNPEFF /////////////////////
-    // one master VCF per child: phased small variants (WhatsHap trio, or
-    // longphase_sv without parents -- either way in the "clair3_longphase"
-    // column) + sniffles (+ dipcall/hapdiff when assembly is on), each
-    // caller's GT:PS kept in its own column. With parents, every site also
-    // gets INFO/ORIGIN (paternal / maternal / both / unknown): small variants
-    // from the parents' genotypes + the child's WhatsHap phase blocks, SVs
-    // from SV_TRIO_ORIGIN.
+    /*
+    ===================== STAGES 6-9 AT A GLANCE =====================
+      stage 5 gave us, per child:  phased SNVs/indels (WhatsHap family)
+                                   + SVs (Sniffles) + SV parent of origin
+      6a CONSOLIDATE  merge all callers -> ONE master VCF per child,
+                      every site labelled INFO/ORIGIN (paternal/maternal)
+      6b SNPEFF       gene + consequence for every site (ANN)
+      6c ALLELE FREQ  gnomAD + 1000 Genomes AF written into INFO, once
+      7  HAPLOTYPES   which parental copies mild & severe sibs share (IBD)
+      8  MODELS       dominant / recessive on shared vs mild-specific copies
+      9  ANNOTATE     AlphaGenome / AlphaMissense on candidates -> report
+    ==================================================================
+    */
+
+    ////////////////// 6a. CONSOLIDATE CALLERS /////////////////////
+    // in:  phased small variants (small_vcf_ch), Sniffles SVs, dipcall/hapdiff
+    //      (assembly only), parents' Clair3 VCFs, SV_TRIO_ORIGIN
+    // out: <child>.master.vcf -- one row per site, each caller's GT:PS in its
+    //      own column, INFO/CALLERS, and (with parents) INFO/ORIGIN
+    // why here: WhatsHap only phases SNVs/indels, so this is where they meet
+    //      the SVs; ORIGIN needs the trio-phased GTs + SV_TRIO_ORIGIN, both
+    //      made in stage 5. Every later step reads this one file per child.
     no_file = file("NO_FILE")
     consolidate_variants(
         small_vcf_ch.map { sid, vcf, tbi -> tuple(sid, vcf) }
@@ -305,32 +345,65 @@ workflow {
     if (!params.snpeff_db) { exit 1, 'params.snpeff_db not set!' }
     if (!params.snpeff_data_dir) { exit 1, 'params.snpeff_data_dir not set!' }
 
+    ////////////////// 6b. SNPEFF /////////////////////
+    // in:  master VCF.  out: same VCF + INFO/ANN (gene, consequence, impact).
+    // The modifier search uses ANN to decide which gene(s) a variant is in
+    // and whether it's in scope (coding / splice / intron / up-downstream / SV).
     snpeff( consolidate_variants.out.consolidated_ch, ch_genome,
             params.snpeff_gtf ? file(params.snpeff_gtf, checkIfExists: true) : file("NO_FILE") )
 
-    vcf_manifest_ch = snpeff.out.snpeff_vcf_ch
-        .map { sid, vcf -> "${sid}\t${vcf.name}" }
-        .collectFile(name: 'vcf_manifest.tsv', newLine: true, sort: true)
-    vcfs_ch = snpeff.out.snpeff_vcf_ch.map { sid, vcf -> vcf }.collect()
-
-    // 1000 Genomes CHM13 EUR AF (kg_AF_EUR column), alongside gnomAD
+    ////////////////// 6c. POPULATION ALLELE FREQUENCY /////////////////////
+    // in:  snpEff VCFs.  out: <child>.snpeff.af.vcf.gz with
+    //      INFO/gnomAD_AF_NFE and INFO/KG_AF_EUR (06_variants/snpeff_af)
+    // Two sources because each misses what the other has: the gnomAD file is
+    // a projection onto CHM13 and drops sites where CHM13 carries the minor
+    // allele; 1000 Genomes is re-called natively on CHM13 (smaller, EUR).
+    // Annotation only -- written once here, read by every later step.
     kg_af_vcf_ch = Channel.value(file("NO_FILE"))
     if (params.kg_af_vcf || params.kg_chm13_vcfs) {
         kg_af()
         kg_af_vcf_ch = kg_af.out.kg_af_ch
     }
+    allele_frequency( snpeff.out.snpeff_vcf_ch, kg_af_vcf_ch )
+
+    // every step below reads these: one AF-annotated VCF per child + a
+    // sampleID<TAB>filename manifest
+    vcf_manifest_ch = allele_frequency.out.af_vcf
+        .map { sid, vcf -> "${sid}\t${vcf.name}" }
+        .collectFile(name: 'vcf_manifest.tsv', newLine: true, sort: true)
+    vcfs_ch = allele_frequency.out.af_vcf.map { sid, vcf -> vcf }.collect()
 
     ////////////////// 7 + 8. MILD vs SEVERE HAPLOTYPES, THEN GENETIC MODELS /////////////////////
+    // in:  AF-annotated VCFs (ORIGIN + ANN + AF), parents' + children's
+    //      genotypes, family.json phenotypes
+    // 7 SIB_HAPLOTYPE_SHARING: per mild x severe pair and per parent, where
+    //      the two sibs inherited the SAME parental copy (HMM over sites where
+    //      that parent is het) -> IBD0/1/2 segments
+    // 8 HAPLOTYPE_MODIFIER: each mild variant = shared_haplotype /
+    //      mild_specific / shared_allele / de_novo; then the dominant and
+    //      recessive models -> cohort.{dominant,recessive}_modifier.tsv
+    // out: <results>/07_haplotypes
+    methylation_ch = Channel.value(file("NO_FILE"))
     if (run_trio) {
-        // which parental haplotypes each mild/severe pair shares -> each mild
-        // variant (already ORIGIN-labelled) marked shared / mild_specific ->
-        // recessive/dominant models (<results>/07_haplotypes)
         haplotype_analysis(
             file(params.family_json), trio_family.out.parent_vcf, small_vcf_ch,
-            vcf_manifest_ch, vcfs_ch, kg_af_vcf_ch
+            vcf_manifest_ch, vcfs_ch
         )
         recessive_ch = haplotype_analysis.out.recessive_modifier_ch
         dominant_ch = haplotype_analysis.out.dominant_modifier_ch
+
+        // promoter methylation, mild vs severe per parental haplotype
+        // (<results>/09_methylation_compare) -- needs the modkit pileups
+        if (params.run_methylation) {
+            def meth_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
+            if (!meth_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_methylation' }
+            methylation_compare(
+                file(params.family_json), modkit.out.modkit, phased_vcf_ch,
+                trio_family.out.parent_vcf, haplotype_analysis.out.parent_segments_ch,
+                file(meth_gtf_path, checkIfExists: true)
+            )
+            methylation_ch = methylation_compare.out.promoter_methylation_ch
+        }
     } else {
         // no parents: legacy variant-level search (exact-match severe filter,
         // read-phase compound hets) -- bin/recessive_modifier_consolidated.py
@@ -340,10 +413,15 @@ workflow {
     }
 
     ////////////////// 9. CANDIDATE ANNOTATION + REPORT /////////////////////
+    // in:  the model TSVs (candidates only, not every variant)
+    // AlphaGenome (regulatory effect; candidates with AF < alphagenome_max_af,
+    // lifted to hg38) and AlphaMissense (missense pathogenicity), then the
+    // per-variant report and the sibling-pair gene summaries (+ CNV, repeat,
+    // methylation) -> <results>/08_annotation, <results>/10_variant_report
     candidate_annotation(
         recessive_ch, dominant_ch, file(params.family_json),
         vcf_manifest_ch, vcfs_ch, samtools_fai_index,
-        repeat_pairs_ch, cnv_gene_cn_ch
+        repeat_pairs_ch, cnv_gene_cn_ch, methylation_ch
     )
 
     } // run_snpeff && family_json

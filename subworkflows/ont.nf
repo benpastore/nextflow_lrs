@@ -750,6 +750,7 @@ workflow variant_report {
         cnv_gene_cn_tsv          // cnv_compare's cohort.cnv_gene_cn.tsv, or file("NO_FILE")
         alphagenome_gene_tsv     // per variant x gene AlphaGenome scores (local), or file("NO_FILE")
         alphagenome_api_gene_tsv // same, API backend, or file("NO_FILE")
+        promoter_methylation_tsv // methylation_compare's cohort.promoter_methylation.tsv, or file("NO_FILE")
 
     main :
         VARIANT_REPORT(
@@ -757,6 +758,7 @@ workflow variant_report {
             vcf_manifest, vcfs,
             candidate_vcf, hg38_vcf, unmap, alphagenome_tsv, alphagenome_api_tsv, alphamissense_tsv,
             repeat_pairs_tsv, cnv_gene_cn_tsv, alphagenome_gene_tsv, alphagenome_api_gene_tsv,
+            promoter_methylation_tsv,
             file("${params.bin}/_modifier_common.py"),
             file("${params.bin}/build_variant_report.py")
         )
@@ -765,4 +767,5 @@ workflow variant_report {
         variant_report_ch = VARIANT_REPORT.out.variant_report_ch
         variant_funnel_ch = VARIANT_REPORT.out.variant_funnel_ch
         sibpair_gene_summary_ch = VARIANT_REPORT.out.sibpair_gene_summary_ch
+        sibpair_gene_summary_slim_ch = VARIANT_REPORT.out.sibpair_gene_summary_slim_ch
 }
