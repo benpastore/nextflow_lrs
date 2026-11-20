@@ -18,21 +18,23 @@ Flow (each stage is a numbered section in the workflow below):
                   labelled with its parental haplotype (INFO/ORIGIN) -> snpEff -> population AF
   7. IBD          hap-ibd on the family-phased VCF: which parental copies each mild /
                   severe sib pair shares (IBD0/1/2)
-  8. mild copies  mild-child variants on a parental copy the severe sib didn't inherit
+  8. modifiers    per family, the mild child's genes with a homozygous variant, a
+                  compound het or a non-genic (regulatory) variant that differs from
+                  the severe sib -> mild / severe VCFs with IBD state + AF
   9. methylation  mild vs severe promoter methylation per parental copy (optional)
+ 10. recurrence   genes passing in >= modifier_min_mild mild children -> AlphaGenome /
+                  AlphaMissense on every mild and severe variant in the gene
+                  (two deduplicated VCFs, scored per side)
 
   With parents:
     WHATSHAP_PHASE_FAMILY ---> family VCF -> ORIENT_PHASE -> HAP_IBD -> IBD_SEGMENTS --+
-         |                                                                            +-> MILD_HAPLOTYPE_VARIANTS
-         +-> child VCFs --+                                                           |
-    SV_TRIO_ORIGIN -------+-> CONSOLIDATE (INFO/ORIGIN) -> SNPEFF -> ANNOTATE_AF -----+
+         |                                                                            +-> MODIFIER_VARIANTS
+         +-> child VCFs --+                                                           |    -> GENE_RECURRENCE
+    SV_TRIO_ORIGIN -------+-> CONSOLIDATE (INFO/ORIGIN) -> SNPEFF -> ANNOTATE_AF -----+    -> AlphaGenome / AlphaMissense
     IBD_SEGMENTS -> METHYLATION_COMPARE
   (assembly: off by default, --assemble_genome true; see subworkflows/assembly.nf)
-  No genetic model is run: the end products are annotated VCFs, the sibling IBD
-  segments, the mild-copy variant table and the CNV / repeat / methylation
-  comparisons. AlphaGenome,
-  AlphaMissense and the variant report (subworkflows/annotation.nf) are kept
-  in the repo but not called.
+  Final mild vs severe outputs, <results>/10_modifier_analysis/:
+    cnv/  repeat_expansion/  methylation/  variants/
 ----------------------------------------------------------------------------------------
 */
 
@@ -66,20 +68,28 @@ def helpMessage() {
     --run_trio_analysis [bool]          Use the parents (family phasing, parent of origin, sibling
                                          haplotype sharing) (default: false)
 
-    Sibling IBD with hap-ibd (<results>/07_haplotypes) and mild-copy variants (<results>/08_mild_haplotype_variants):
+    Sibling IBD with hap-ibd (<results>/07_haplotypes):
     --hapibd_jar [file]                 hap-ibd.jar (required with --run_trio_analysis)
     --hapibd_min_seed / --hapibd_min_extend / --hapibd_min_output [cM]   hap-ibd segment lengths (2.0 / 1.0 / 2.0)
     --hapibd_max_gap [bp]               hap-ibd max-gap (default 1000)
     --hapibd_min_gq [int]               drop child hets below this GQ before hap-ibd (default 20)
     --hapibd_bridge_cm [cM]             not_shared gaps shorter than this between shared segments are bridged (2.0)
     --hap_exclude_chroms [str]          Not scanned (default 'chrX,chrY,chrM')
-    --mild_variants_rare_af [float]     AF below which a variant counts as rare in the gene summary (0.01)
+
+    Modifier search (<results>/10_modifier_analysis/variants; needs --run_trio_analysis + --run_snpeff):
+    --run_modifier_analysis [bool]      Run it (default: true)
+    --modifier_sv_match_dist [bp]       SVs of the same type within this distance match (500)
+    --modifier_min_mild [int]           Mild children a gene must pass in for AlphaGenome / AlphaMissense (2)
+    --modifier_candidate_max_af [float] AlphaGenome / AlphaMissense input only: drop variants with every
+                                         annotated AF >= this (default "" = no filter)
+    --run_alphagenome / --run_alphagenome_api [bool]   AlphaGenome local / hosted API (default: false)
+    --alphamissense_tsv [file]          AlphaMissense table; set = run AlphaMissense
 
     Optional branches:
     --assemble_genome [bool]            hifiasm assembly -> dipcall/hapdiff (default: false)
     --run_methylation [bool]            Raw-read alignment + modkit per haplotype (default: false); with
                                          --run_trio_analysis also mild vs severe promoter methylation per
-                                         parental haplotype (<results>/09_methylation_compare)
+                                         parental haplotype (<results>/10_modifier_analysis/methylation)
     --run_snpeff [bool]                 snpEff + population AF annotation of the master VCFs (default: true)
     --run_cnv_compare / --run_repeat_compare [bool]   mild vs severe Spectre / Straglr comparison
     --run_read_length_plot [bool]       Read-length histogram + N50 per sample (default: true)
@@ -118,8 +128,8 @@ include { minimap2_index; minimap2; minimap2_methylation; clair3; longphase; sni
           straglr; haplotype_annotate_straglr; spectre; haplotype_annotate_spectre; cnv_compare;
           repeat_compare; paraphase; methylation_haplotag; modkit; consolidate_variants; snpeff;
           kg_af } from '../../subworkflows/ont.nf'
-include { haplotype_analysis; mild_haplotype_variants; methylation_compare } from '../../subworkflows/haplotypes.nf'
-include { allele_frequency } from '../../subworkflows/annotation.nf'
+include { haplotype_analysis; modifier_analysis; methylation_compare } from '../../subworkflows/haplotypes.nf'
+include { allele_frequency; modifier_annotation } from '../../subworkflows/annotation.nf'
 
 workflow parse_design {
     take :
@@ -238,8 +248,8 @@ workflow {
         modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
     }
 
-    // mild vs severe CNV / repeat comparison (<results>/09_cnv_repeat_compare);
-    // per-pair outputs also feed the final report
+    // mild vs severe CNV / repeat comparison
+    // (<results>/10_modifier_analysis/{cnv,repeat_expansion})
     repeat_pairs_ch = Channel.value(file("NO_FILE"))
     cnv_gene_cn_ch = Channel.value(file("NO_FILE"))
     if (params.family_json && (params.run_cnv_compare || params.run_repeat_compare)) {
@@ -380,20 +390,49 @@ workflow {
     if (run_trio) {
         haplotype_analysis( file(params.family_json), WHATSHAP_PHASE_FAMILY.out.family_vcf_ch, samtools_fai_index )
 
-        ////////////////// 8. MILD-COPY VARIANTS /////////////////////
-        // in:  annotated master VCFs (ORIGIN + ANN + AF; plain master VCFs when
-        //      --run_snpeff is off) + the stage 7 shared / not_shared segments
-        // out: every mild variant on a parental copy the severe sib didn't
-        //      inherit, flagged if the severe sib carries the allele anyway,
-        //      + a per-gene summary (<results>/08_mild_haplotype_variants)
-        variant_vcf_ch = params.run_snpeff ? allele_frequency.out.af_vcf : consolidate_variants.out.consolidated_ch
-        mild_haplotype_variants( file(params.family_json), variant_vcf_ch, haplotype_analysis.out.parent_segments_ch )
+        ////////////////// 8. MODIFIER GENES (variant based) /////////////////////
+        // in:  annotated master VCFs (ORIGIN + ANN + AF) + the stage 7 IBD0/1/2
+        //      segments + the gene model
+        // out: per family (<results>/10_modifier_analysis/variants/families/<family>):
+        //      the mild child's passing genes -- homozygous (severe sib not
+        //      homozygous for it), compound_het (>= 1 het per parental copy,
+        //      >= 1 absent from the severe sib), regulatory (non-genic, not
+        //      carried identically by the severe sib; both flanking genes) --
+        //      plus mild / severe VCFs of the supporting variants with
+        //      INFO/IBD + AF. Then the cohort count of families per gene.
+        //      No statistical model and no AF filter.
+        if (params.run_modifier_analysis) {
+            if (!params.run_snpeff) {
+                log.warn "--run_modifier_analysis needs snpEff annotation (--run_snpeff) -- skipping the modifier search"
+            } else {
+                def mod_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
+                if (!mod_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_modifier_analysis' }
+                modifier_analysis(
+                    file(params.family_json), allele_frequency.out.af_vcf,
+                    haplotype_analysis.out.ibd_segments_ch.first(),
+                    file(mod_gtf_path, checkIfExists: true)
+                )
+
+                ////////////////// 10. ALPHAGENOME / ALPHAMISSENSE /////////////////////
+                // every mild / severe variant in the genes passing in >=
+                // modifier_min_mild mild children, one chain per side; each
+                // tool's per-variant output as is
+                // (<results>/10_modifier_analysis/variants/<tool>/{mild,severe})
+                if (params.run_alphagenome || params.run_alphagenome_api || params.alphamissense_tsv) {
+                    modifier_annotation(
+                        modifier_analysis.out.mild_candidate_vcf_ch,
+                        modifier_analysis.out.severe_candidate_vcf_ch,
+                        samtools_fai_index
+                    )
+                }
+            }
+        }
 
         ////////////////// 9. PROMOTER METHYLATION /////////////////////
         // in:  modkit HP1/HP2 pileups, longphase_sv VCF (source of the HP
         //      tags), parents' VCFs, the stage 7 sharing segments
         // out: mild vs severe promoter 5mC, combined and per parental copy,
-        //      each copy labelled shared / not_shared (<results>/09_methylation_compare)
+        //      each copy labelled shared / not_shared (<results>/10_modifier_analysis/methylation)
         if (params.run_methylation) {
             def meth_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
             if (!meth_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_methylation' }

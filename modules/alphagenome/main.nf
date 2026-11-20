@@ -1,14 +1,13 @@
-// AlphaGenome functional scoring of the recessive/dominant-modifier
-// candidate variants (see modules/recessive_modifier/main.nf) -- for this
-// SMA study, restricted to motor-neuron-relevant tissue (see
-// bin/run_alphagenome.py). Three steps, chained: union the two modifier
-// TSVs into one small CHM13-coordinate VCF (BUILD_ALPHAGENOME_INPUT),
-// liftover to hg38 since AlphaGenome is trained on that build
-// (LIFTOVER_ALPHAGENOME_VARIANTS, via CrossMap), then score locally against
-// a pre-downloaded Kaggle AlphaGenome weights directory (ALPHAGENOME).
-// Single process chain for the whole cohort, not per-sample, matching
-// RECESSIVE_MODIFIER's own shape -- the modifier TSVs are already
-// cohort-level.
+// AlphaGenome functional scoring of every mild / severe variant in the
+// recurrent modifier genes (bin/gene_recurrence.py's
+// candidate_variants.{mild,severe}.chm13.vcf, one chain per side, published
+// under .../alphagenome/<side>) --
+// for this SMA study, restricted to motor-neuron-relevant tissue (see
+// bin/run_alphagenome.py). Lift CHM13 -> hg38 since AlphaGenome is trained
+// on that build (LIFTOVER_ALPHAGENOME_VARIANTS, via CrossMap), then score
+// locally against a pre-downloaded Kaggle AlphaGenome weights directory
+// (ALPHAGENOME, chunked) and/or via the hosted API (ALPHAGENOME_API).
+// Whole cohort in one chain, not per sample.
 
 process FETCH_CHM13_TO_HG38_CHAIN {
 
@@ -58,42 +57,14 @@ process FETCH_CHM13_TO_HG38_CHAIN {
     """
 }
 
-process BUILD_ALPHAGENOME_INPUT {
-
-    label 'low'
-    publishDir "${params.results}/08_annotation/alphagenome", mode: params.publish_mode
-
-    input:
-        path(recessive_tsv)
-        path(dominant_tsv)
-        path(script)
-
-    output:
-        path("candidate_variants.chm13.vcf"), emit: candidate_vcf_ch
-
-    script:
-    """
-    #!/bin/bash
-    set -euo pipefail
-
-    set +u
-    source activate rnaseq
-    set -u
-
-    python3 ${script} \\
-        -recessive_tsv ${recessive_tsv} \\
-        -dominant_tsv ${dominant_tsv} \\
-        ${params.alphagenome_max_af != null && params.alphagenome_max_af != '' ? "-max_af ${params.alphagenome_max_af}" : ''} \\
-        -output candidate_variants.chm13.vcf
-    """
-}
-
 process LIFTOVER_ALPHAGENOME_VARIANTS {
 
     label 'crossmap'
-    publishDir "${params.results}/08_annotation/alphagenome", mode: params.publish_mode
+    tag "${side}"
+    publishDir "${params.results}/10_modifier_analysis/variants/alphagenome/${side}", mode: params.publish_mode
 
     input:
+        val(side)            // mild / severe (candidate_variants.<side>.chm13.vcf)
         path(vcf)
         path(chain)
         tuple path(hg38_genome), path(hg38_genome_fai)
@@ -151,15 +122,16 @@ process ALPHAGENOME {
     // failed chunk reruns alone on -resume. Chunk outputs aren't published;
     // MERGE_ALPHAGENOME_CHUNKS joins them into cohort.alphagenome.tsv.
     label 'alphagenome'
-    tag "chunk ${chunk_index + 1}/${n_chunks}"
+    tag "${side} chunk ${chunk_index + 1}/${n_chunks}"
 
     input:
+        val(side)
         tuple val(chunk_index), val(n_chunks), path(candidate_vcf), path(vcf), path(hg38_genome), path(hg38_genome_fai)
         path(script)
 
     output:
-        path("cohort.alphagenome.chunk_*.tsv"), emit: alphagenome_chunk_ch
-        path("cohort.alphagenome.genes.chunk_*.tsv"), emit: alphagenome_gene_chunk_ch
+        tuple val(side), path("cohort.alphagenome.chunk_*.tsv"), emit: alphagenome_chunk_ch
+        tuple val(side), path("cohort.alphagenome.genes.chunk_*.tsv"), emit: alphagenome_gene_chunk_ch
 
     script:
     """
@@ -191,10 +163,11 @@ process MERGE_ALPHAGENOME_CHUNKS {
     // the same row order a single unchunked run would. Merges both the
     // per-variant chunks and the per-gene chunks (-gene_output).
     label 'low'
-    publishDir "${params.results}/08_annotation/alphagenome", mode: params.publish_mode
+    tag "${side}"
+    publishDir "${params.results}/10_modifier_analysis/variants/alphagenome/${side}", mode: params.publish_mode
 
     input:
-        path(chunks)
+        tuple val(side), path(chunks)
 
     output:
         path("cohort.alphagenome.tsv"), emit: alphagenome_ch
@@ -229,10 +202,12 @@ process ALPHAGENOME_API {
     // the work dir. Set it once on OSC:
     //   nextflow secrets set ALPHAGENOME_API_KEY <your key>
     label 'alphagenome_api'
-    publishDir "${params.results}/08_annotation/alphagenome_api", mode: params.publish_mode
+    tag "${side}"
+    publishDir "${params.results}/10_modifier_analysis/variants/alphagenome_api/${side}", mode: params.publish_mode
     secret 'ALPHAGENOME_API_KEY'
 
     input:
+        val(side)
         path(candidate_vcf)
         path(vcf)
         tuple path(hg38_genome), path(hg38_genome_fai)

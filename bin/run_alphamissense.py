@@ -41,6 +41,7 @@ BENIGN_MAX, PATHOGENIC_MIN = 0.34, 0.564
 
 COLUMNS = [
     "VID", "CHROM", "POS", "REF", "ALT", "GENE", "SOURCE_MODEL",
+    "SAMPLES", "MILD_SAMPLES", "SEVERE_SAMPLES", "CARRIERS",
     "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT",
     "status", "note",
     "am_pathogenicity", "am_class", "am_protein_variant", "am_transcript", "am_uniprot",
@@ -203,6 +204,7 @@ def main():
         for vid, (chrom, pos, ref, alt, info) in candidates.items():
             row = {"VID": vid, "CHROM": chrom, "POS": pos, "REF": ref, "ALT": alt,
                    "GENE": info_value(info, "GENE"), "SOURCE_MODEL": info_value(info, "SOURCE_MODEL")}
+            row.update({k: info_value(info, k) for k in ("SAMPLES", "MILD_SAMPLES", "SEVERE_SAMPLES", "CARRIERS")})
 
             if len(ref) != 1 or len(alt) != 1 or alt.startswith("<"):
                 row["status"] = "not_snv"

@@ -55,6 +55,55 @@ workflow mild_haplotype_variants {
         genes_ch    = MILD_HAPLOTYPE_VARIANTS.out.genes_ch
 }
 
+// Variant-based modifier search (one cohort task): per discordant family, the
+// mild child's passing genes (homozygous / compound_het / regulatory) vs its
+// severe sib(s), concordant severe children as extra exclusion controls, then the
+// cohort count of mild children per gene; for the recurrent genes every mild
+// and severe variant in the gene goes to AlphaGenome / AlphaMissense as two
+// deduplicated VCFs. See modules/modifier/main.nf.
+include { MODIFIER_VARIANTS; GENE_RECURRENCE } from '../modules/modifier/main.nf'
+
+workflow modifier_analysis {
+
+    take :
+        family_json      // path to family.json
+        variant_vcf      // tuple(childID, annotated master VCF: ORIGIN + ANN + AF)
+        ibd_segments     // cohort.sib_ibd_segments.tsv (hapibd_segments.py)
+        gtf              // gene model on the reference (protein-coding = has CDS)
+
+    main :
+        // one task for the cohort: every mild / severe child goes in;
+        // modifier_variants.py groups them into families (father + mother),
+        // runs the rules per discordant family and uses the severe children
+        // of concordant (severe-only) families as extra exclusion controls
+        def fam = new groovy.json.JsonSlurper().parseText(family_json.text)
+        child_ch = variant_vcf
+            .filter { sid, vcf -> fam[sid] && fam[sid].phenotype in ['mild', 'severe'] }
+            .toSortedList { a, b -> a[0] <=> b[0] }
+        sample_args = child_ch.map { kids -> kids.collect { sid, vcf -> "-sample_vcf ${sid}=${vcf.name}" }.join(' ') }
+        vcf_files = child_ch.map { kids -> kids.collect { sid, vcf -> vcf } }
+
+        MODIFIER_VARIANTS(
+            sample_args, vcf_files, family_json, ibd_segments, gtf,
+            file("${params.bin}/_modifier_common.py"),
+            file("${params.bin}/_cnv_repeat_common.py"),
+            file("${params.bin}/modifier_variants.py")
+        )
+
+        GENE_RECURRENCE(
+            MODIFIER_VARIANTS.out.genes_ch.collect(),
+            MODIFIER_VARIANTS.out.gene_variants_ch.collect(),
+            file("${params.bin}/gene_recurrence.py")
+        )
+
+    emit :
+        passing_genes_ch        = GENE_RECURRENCE.out.passing_genes_ch
+        recurrence_ch           = GENE_RECURRENCE.out.recurrence_ch
+        // AlphaGenome / AlphaMissense input: every mild / severe variant in the recurrent genes
+        mild_candidate_vcf_ch   = GENE_RECURRENCE.out.mild_candidate_vcf_ch
+        severe_candidate_vcf_ch = GENE_RECURRENCE.out.severe_candidate_vcf_ch
+}
+
 // Mild vs severe promoter methylation per parental haplotype. See
 // modules/methylation_compare/main.nf.
 include { METHYLATION_COMPARE } from '../modules/methylation_compare/main.nf'

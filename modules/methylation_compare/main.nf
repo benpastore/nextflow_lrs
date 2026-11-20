@@ -10,7 +10,7 @@
 process METHYLATION_COMPARE {
 
     label 'cohort_python'
-    publishDir "${params.results}/09_methylation_compare", mode: params.publish_mode
+    publishDir "${params.results}/10_modifier_analysis/methylation", mode: params.publish_mode
 
     input:
         path(family_json)

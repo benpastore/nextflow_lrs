@@ -8,5 +8,6 @@
         "father" : "A_parent110",
         "mother" : "A_parent111",
         "phenotype" : "mild"
-    }
+    },
+    "discordant" : {}
 }

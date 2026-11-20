@@ -3,8 +3,8 @@
 // groupings (see load_family_groups in
 // bin/_modifier_common.py). Gene association comes from the same GTF
 // snpEff is built from (params.cnv_repeat_gtf, default params.snpeff_gtf).
-//   CNV_COMPARE     bin/cnv_compare.py    -> 09_cnv_repeat_compare/cnv
-//   REPEAT_COMPARE  bin/repeat_compare.py -> 09_cnv_repeat_compare/repeats
+//   CNV_COMPARE     bin/cnv_compare.py    -> 10_modifier_analysis/cnv
+//   REPEAT_COMPARE  bin/repeat_compare.py -> 10_modifier_analysis/repeat_expansion
 // Single process each for the whole cohort (the comparison is inherently
 // cross-sample); every sample's caller output is staged next to a
 // sampleID<TAB>filename manifest.
@@ -12,7 +12,7 @@
 process CNV_COMPARE {
 
     label 'low'
-    publishDir "${params.results}/09_cnv_repeat_compare/cnv", mode: params.publish_mode
+    publishDir "${params.results}/10_modifier_analysis/cnv", mode: params.publish_mode
 
     input:
         path(family_json)
@@ -52,7 +52,7 @@ process CNV_COMPARE {
 process REPEAT_COMPARE {
 
     label 'low'
-    publishDir "${params.results}/09_cnv_repeat_compare/repeats", mode: params.publish_mode
+    publishDir "${params.results}/10_modifier_analysis/repeat_expansion", mode: params.publish_mode
 
     input:
         path(family_json)

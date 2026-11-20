@@ -61,8 +61,13 @@ def parse_vcf(path):
                 get_info_field(info, "GENE"),
                 get_info_field(info, "REASON"),
                 get_info_field(info, "SAMPLES"),
+                {k: get_info_field(info, k) for k in CARRIER_FIELDS},
                 "ALLELE_FLIPPED" in info.split(";"),
             )
+
+
+# gene_recurrence.py carrier fields, passed straight through to the output
+CARRIER_FIELDS = ("MILD_SAMPLES", "SEVERE_SAMPLES", "CARRIERS")
 
 
 # Ontology terms scored, in priority order -- motor neuron is the primary,
@@ -490,10 +495,11 @@ def main():
     # lift over or failed AlphaGenome scoring -- neither case silently
     # drops a variant from the final table.
     candidates_by_vid = {}
-    for vid, chrom, pos, ref, alt, source_model, gene, reason, samples, _flipped in parse_vcf(args.candidate_vcf):
+    for vid, chrom, pos, ref, alt, source_model, gene, reason, samples, extra, _flipped in parse_vcf(args.candidate_vcf):
         candidates_by_vid[vid] = {
             "chrom": chrom, "pos": pos, "ref": ref, "alt": alt,
             "source_model": source_model, "gene": gene, "reason": reason, "samples": samples,
+            "extra": extra,
         }
 
     lifted_by_vid = {}
@@ -513,7 +519,7 @@ def main():
     columns = [
         "VID", "ORIG_CHROM", "ORIG_POS", "ORIG_REF", "ORIG_ALT",
         "HG38_CHROM", "HG38_POS", "HG38_REF", "HG38_ALT",
-        "SOURCE_MODEL", "GENE", "REASON", "SAMPLES", "status", "allele_flipped", "note",
+        "SOURCE_MODEL", "GENE", "REASON", "SAMPLES", *CARRIER_FIELDS, "status", "allele_flipped", "note",
         *score_columns(),
         "n_impacted_genes", "impacted_genes",
         "motor_neuron_max_abs", "best_output_type", "best_track", "large_impact_motor_neuron",
@@ -563,7 +569,7 @@ def main():
                 "VID": vid, "ORIG_CHROM": meta["chrom"], "ORIG_POS": meta["pos"],
                 "ORIG_REF": meta["ref"], "ORIG_ALT": meta["alt"],
                 "SOURCE_MODEL": meta["source_model"], "GENE": meta["gene"],
-                "REASON": meta["reason"], "SAMPLES": meta["samples"],
+                "REASON": meta["reason"], "SAMPLES": meta["samples"], **meta["extra"],
             }
 
             if vid not in lifted_by_vid:

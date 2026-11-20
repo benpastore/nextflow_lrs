@@ -550,24 +550,19 @@ workflow kg_af {
         kg_af_ch = kg_sites_ch
 }
 
-include { FETCH_CHM13_TO_HG38_CHAIN; BUILD_ALPHAGENOME_INPUT; LIFTOVER_ALPHAGENOME_VARIANTS; ALPHAGENOME; MERGE_ALPHAGENOME_CHUNKS; ALPHAGENOME_API } from '../modules/alphagenome/main.nf'
+include { FETCH_CHM13_TO_HG38_CHAIN; LIFTOVER_ALPHAGENOME_VARIANTS; ALPHAGENOME; MERGE_ALPHAGENOME_CHUNKS; ALPHAGENOME_API } from '../modules/alphagenome/main.nf'
 workflow alphagenome {
 
     take :
-        recessive_modifier_tsv   // cohort.recessive_modifier.tsv
-        dominant_modifier_tsv    // cohort.dominant_modifier.tsv
+        side                     // 'mild' / 'severe' -- names the publish subdir; a plain value
+        candidate_vcf            // candidate_variants.<side>.chm13.vcf (bin/gene_recurrence.py)
         hg38_fai_index           // tuple path(hg38 FASTA), path(its .fai) -- AlphaGenome's training build
         skip_liftover            // true when params.genome_version == "HG38" -- the pipeline's own
                                   // reference IS hg38 already, so candidates need no liftover at all
 
     main :
-        BUILD_ALPHAGENOME_INPUT(
-            recessive_modifier_tsv, dominant_modifier_tsv,
-            file("${params.bin}/build_alphagenome_input.py")
-        )
-
         if (skip_liftover) {
-            scoring_vcf_ch = BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch
+            scoring_vcf_ch = candidate_vcf
             unmapped_ch = Channel.empty()
         } else {
             // params.chm13_to_hg38_chain is optional -- if unset, fetch
@@ -582,7 +577,7 @@ workflow alphagenome {
             }
 
             LIFTOVER_ALPHAGENOME_VARIANTS(
-                BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
+                side, candidate_vcf,
                 chain_ch, hg38_fai_index,
                 file("${params.bin}/flip_ref_alt_alleles.py")
             )
@@ -599,20 +594,20 @@ workflow alphagenome {
         if (params.run_alphagenome) {
             // one (chunk_index, n_chunks) per params.alphagenome_chunk_size
             // candidates, each paired with the (single) input files
-            chunk_ch = BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch
+            chunk_ch = candidate_vcf
                 .flatMap { vcf ->
                     def n = 0
                     vcf.eachLine { line -> if (!line.startsWith('#')) n++ }
                     def k = Math.max(1, (int) Math.ceil(n / (params.alphagenome_chunk_size as double)))
                     (0..<k).collect { i -> tuple(i, k) }
                 }
-                .combine( BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch )
+                .combine( candidate_vcf )
                 .combine( scoring_vcf_ch )
                 .combine( hg38_fai_index )
 
-            ALPHAGENOME( chunk_ch, file("${params.bin}/run_alphagenome.py") )
+            ALPHAGENOME( side, chunk_ch, file("${params.bin}/run_alphagenome.py") )
             MERGE_ALPHAGENOME_CHUNKS(
-                ALPHAGENOME.out.alphagenome_chunk_ch.mix( ALPHAGENOME.out.alphagenome_gene_chunk_ch ).collect()
+                ALPHAGENOME.out.alphagenome_chunk_ch.mix( ALPHAGENOME.out.alphagenome_gene_chunk_ch ).groupTuple()
             )
             local_scores_ch = MERGE_ALPHAGENOME_CHUNKS.out.alphagenome_ch
             local_gene_scores_ch = MERGE_ALPHAGENOME_CHUNKS.out.alphagenome_gene_ch
@@ -622,7 +617,7 @@ workflow alphagenome {
         api_gene_scores_ch = Channel.empty()
         if (params.run_alphagenome_api) {
             ALPHAGENOME_API(
-                BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch,
+                side, candidate_vcf,
                 scoring_vcf_ch,
                 hg38_fai_index,
                 file("${params.bin}/run_alphagenome.py")
@@ -638,16 +633,16 @@ workflow alphagenome {
         alphagenome_api_gene_ch = api_gene_scores_ch
         alphagenome_unmapped_ch = unmapped_ch
         hg38_vcf_ch = scoring_vcf_ch       // candidates in hg38 coords (also used for AlphaMissense lookup)
-        candidate_vcf_ch = BUILD_ALPHAGENOME_INPUT.out.candidate_vcf_ch   // post-SV/AF-filter input, for the variant funnel
+        candidate_vcf_ch = candidate_vcf
 }
 
 include { FETCH_CHM13_TO_HG38_CHAIN as FETCH_CHM13_TO_HG38_CHAIN_AM } from '../modules/alphagenome/main.nf'
-include { PREPARE_ALPHAMISSENSE_INDEX; BUILD_ALPHAMISSENSE_INPUT; LIFTOVER_ALPHAMISSENSE_VARIANTS; ALPHAMISSENSE } from '../modules/alphamissense/main.nf'
+include { PREPARE_ALPHAMISSENSE_INDEX; LIFTOVER_ALPHAMISSENSE_VARIANTS; ALPHAMISSENSE } from '../modules/alphamissense/main.nf'
 workflow alphamissense {
 
     take :
-        recessive_modifier_tsv   // cohort.recessive_modifier.tsv
-        dominant_modifier_tsv    // cohort.dominant_modifier.tsv
+        side                     // 'mild' / 'severe' -- names the publish subdir; a plain value
+        candidate_vcf            // candidate_variants.<side>.chm13.vcf (bin/gene_recurrence.py)
         hg38_fai_index           // tuple path(hg38 FASTA), path(its .fai)
         skip_liftover            // true when params.genome_version == "HG38"
 
@@ -668,13 +663,8 @@ workflow alphamissense {
             am_index_ch = PREPARE_ALPHAMISSENSE_INDEX.out.index_ch
         }
 
-        BUILD_ALPHAMISSENSE_INPUT(
-            recessive_modifier_tsv, dominant_modifier_tsv,
-            file("${params.bin}/build_alphagenome_input.py")
-        )
-
         if (skip_liftover) {
-            hg38_vcf_ch = BUILD_ALPHAMISSENSE_INPUT.out.candidate_vcf_ch
+            hg38_vcf_ch = candidate_vcf
             unmap_ch = Channel.value(file("NO_FILE"))
         } else {
             // same chain as the alphagenome workflow: params.chm13_to_hg38_chain,
@@ -689,13 +679,13 @@ workflow alphamissense {
                 chain_ch = FETCH_CHM13_TO_HG38_CHAIN_AM.out.chain_ch
             }
 
-            LIFTOVER_ALPHAMISSENSE_VARIANTS( BUILD_ALPHAMISSENSE_INPUT.out.candidate_vcf_ch, chain_ch, hg38_fai_index )
+            LIFTOVER_ALPHAMISSENSE_VARIANTS( side, candidate_vcf, chain_ch, hg38_fai_index )
             hg38_vcf_ch = LIFTOVER_ALPHAMISSENSE_VARIANTS.out.lifted_vcf_ch
             unmap_ch = LIFTOVER_ALPHAMISSENSE_VARIANTS.out.unmapped_ch
         }
 
         ALPHAMISSENSE(
-            BUILD_ALPHAMISSENSE_INPUT.out.candidate_vcf_ch,
+            side, candidate_vcf,
             hg38_vcf_ch,
             unmap_ch,
             am_index_ch,
