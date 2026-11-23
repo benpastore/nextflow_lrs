@@ -2,7 +2,7 @@
 """
 Post-hoc haplotype annotation for callers that have no native phasing mode
 (Straglr repeat expansions, Spectre CNVs) -- unlike Clair3 (phased via
-longphase/longphase_sv) and Sniffles (phased natively via --phase), neither
+longphase_sv) and Sniffles SVs (phased jointly with them by longphase_sv), neither
 tool reads the HP:i:1/HP:i:2 tags already present on reads in the haplotagged
 BAM they were called against.
 

@@ -2,9 +2,9 @@
 // transmission (is the SV in the father's / mother's own Sniffles calls?)
 // and haplotype (the SV's longphase haplotype, mapped to a parent from the
 // child's phased SNVs where the parents' Clair3 genotypes differ), with a
-// final origin + which evidence gave it. The SNV VCF must be the phased
-// VCF of the BAM Sniffles ran on -- LONGPHASE round 1 in this pipeline --
-// so the phase-block IDs match.
+// final origin + which evidence gave it. The SV and SNV VCFs both come from
+// the same LONGPHASE_SV run (*.longphase_sv.SV.sniffles.vcf.gz and
+// *.longphase_sv.vcf.gz) so the phase-block IDs match.
 
 process SV_TRIO_ORIGIN {
 

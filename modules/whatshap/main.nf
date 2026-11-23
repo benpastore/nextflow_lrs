@@ -75,7 +75,7 @@ process WHATSHAP_PHASE_FAMILY {
     // reads), then split back into one phased VCF per child. With
     // --run_trio_analysis the per-child output REPLACES longphase_sv as the
     // child's phased small-variant VCF for consolidation and the haplotype
-    // analysis (see main.nf stage 5).
+    // analysis (see main.nf stage 4).
     //
     // Compared with phasing each child as its own trio, the parents are
     // themselves phased (their reads + transmission to every child), every

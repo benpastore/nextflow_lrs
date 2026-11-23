@@ -177,8 +177,8 @@ How each caller here ends up with (or without) haplotype information, since it d
 
 | Caller | Haplotype info | How |
 |---|---|---|
-| Clair3 | Real, native phase | Phased downstream by `LONGPHASE`/`LONGPHASE_SV` (`GT` with `\|` + `PS`), not by Clair3 itself |
-| Sniffles | Real, native phase | `--phase` reads the HP/PS tags already on its input bam, writes `PHASE=` in `INFO` |
+| Clair3 | Real phase, from longphase | Phased downstream by `LONGPHASE_SV` (`GT` with `\|` + `PS`), not by Clair3 itself |
+| Sniffles | Real phase, from longphase | Called unphased on the minimap2 bam; `LONGPHASE_SV` (`--sv-file`) phases the SVs jointly with the Clair3 SNVs (`GT` with `\|` + `PS`, same blocks) |
 | Straglr | Post-hoc annotation | No native mode — `HAPLOTYPE_ANNOTATE_STRAGLR` tags calls from HP-tagged reads afterward |
 | Spectre | Post-hoc annotation | Same as Straglr — `HAPLOTYPE_ANNOTATE_SPECTRE` |
 | Dipcall / Hapdiff | Inherent (assembly-based) | Already phase-resolved by construction — called from the haplotype-split assembly itself, see §4 |
@@ -195,14 +195,15 @@ ONT small-variant calling (`run_clair3.sh`, GPU, `r941_prom_sup_g5014` model).
 - **out**: `tuple val(sampleID), path("*.clair3.vcf.gz"), path("*.clair3.vcf.gz.tbi")` → `clair3_ch`
 
 ### `LONGPHASE` — `modules/longphase/main.nf`
-First-pass phasing + haplotagging from clair3 SNP/indel calls alone (`longphase phase` + `haplotag`).
+SNV-only phasing + haplotagging (`longphase phase` + `haplotag`). **Not used by the haplotype_aware
+workflow any more** -- it runs a single `LONGPHASE_SV`; kept for other workflows.
 - **in**: `tuple val(ref_fa), val(ref_fai)`, `tuple val(sampleID), val(vcf), val(tbi), val(bam), val(bai)`
 - **out**: haplotagged bam → `longphase_ch`; phased vcf → `longphase_vcf_ch`; combined → `longphase_full_ch`
 
 ### `SNIFFLES` — `modules/sniffles/main.nf`
-Structural-variant calling from the longphase-haplotagged bam, with `--phase` (reads the HP/PS tags
-already on that bam and writes a per-SV `PHASE=` field in `INFO` — Sniffles doesn't need re-haplotagging
-of its own, unlike Straglr/Spectre below). Emits a raw `.vcf`, not `.vcf.gz` — see `INDEX_SNIFFLES_VCF`.
+Structural-variant calling, unphased, from the plain minimap2 bam (the same bam Clair3 runs on). The SVs
+are phased afterwards by `LONGPHASE_SV`, jointly with the SNVs. Emits a raw `.vcf`, not `.vcf.gz` — see
+`INDEX_SNIFFLES_VCF`.
 - **in**: `tuple val(sampleID), val(bam), val(bai)`
 - **out**: `tuple val(sampleID), path("*.sniffles.vcf")` → `sniffles_raw_ch`
 
@@ -214,11 +215,14 @@ in `SNIFFLES` the way most other modules do it.
 - **out**: `tuple val(sampleID), path("*.sniffles.vcf.gz"), path("*.sniffles.vcf.gz.tbi")` → `sniffles_ch`
 
 ### `LONGPHASE_SV` — `modules/longphase/main.nf`
-Second-pass phasing that additionally incorporates the sniffles SV calls (`--sv-file`), re-haplotagging
-the bam. This is the "final" haplotagged bam most downstream tools (straglr, spectre, paraphase,
-modkit) consume.
+The one phasing run: Clair3 SNVs/indels + Sniffles SVs phased together (`--sv-file`) on the minimap2 bam,
+then haplotagged. Its bam, SNV VCF and SV VCF share phase blocks; the bam is what downstream tools
+(straglr, spectre, paraphase, modkit, WhatsHap reads) consume, the SV VCF is the only SV input to
+`SV_TRIO_ORIGIN` and consolidation.
 - **in**: `tuple val(ref_fa), val(ref_fai)`, `tuple val(sampleID), val(snp_vcf), val(snp_tbi), val(sv_vcf), val(sv_tbi), val(bam), val(bai)`
-- **out**: haplotagged bam → `longphase_sv_ch`; phased vcf → `longphase_sv_vcf_ch`; combined → `longphase_sv_full_ch`
+- **out**: haplotagged bam → `longphase_sv_ch`; phased SNV/indel vcf → `longphase_sv_vcf_ch`; phased SVs
+  (longphase's `<prefix>_SV.vcf`, published as `*.longphase_sv.SV.sniffles.vcf.gz`) → `longphase_sv_sv_vcf_ch`;
+  combined → `longphase_sv_full_ch`
 
 ### `STRAGLR` — `modules/straglr/main.nf`
 Repeat-expansion genotyping (`straglr.py`) on the final haplotagged bam. No native haplotype-aware
@@ -331,7 +335,7 @@ the hap-ibd steps. SVs aren't included (whatshap can't phase them) — their par
 Parent of origin for each child Sniffles SV (`bin/sv_trio_origin.py`). Parents get their own `SNIFFLES` run in
 `subworkflows/trio.nf`. Two lines of evidence: **transmission** (SV also in father's / mother's Sniffles calls —
 same type with INS~DUP compatible, start within `sv_merge_dist`, size ratio ≥ 0.5) and
-**haplotype** (the SV's Sniffles `PHASE` hp/block, with each LONGPHASE round-1 block's HP1 assigned to a parent from
+**haplotype** (the SV's phased GT + PS from `LONGPHASE_SV`, with each block of the same run's SNV VCF having its HP1 assigned to a parent from
 the child's phased het SNVs where the parents' genotypes differ; ≥ 3 informative SNVs, ≥ 80% agreement).
 - **in**: `tuple val(child), val(child_sv), val(child_snv), val(father), val(mother), val(father_snv), val(mother_snv), val(father_sv), val(mother_sv)`
 - **out** (`06_variants/sv_trio_origin`): `<child>.sv_trio_origin.tsv` (per SV: transmission, haplotype_origin, origin,

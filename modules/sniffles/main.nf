@@ -16,8 +16,9 @@ process SNIFFLES {
 
     name=\$(basename ${bam} .bam)
 
-    # --phase uses the HP/PS tags already on this BAM (haplotagged by
-    # longphase upstream) to emit a per-SV PHASE= field in INFO.
+    # Unphased: runs on the plain minimap2 BAM. The SVs are phased afterwards
+    # by LONGPHASE_SV (--sv-file), jointly with the Clair3 SNVs, so their
+    # phase blocks match the BAM/VCF everything downstream uses.
     #
     # bgzip/tabix aren't in this container (the biocontainers sniffles
     # image only ships sniffles itself, no htslib CLI tools) -- compression
@@ -31,7 +32,6 @@ process SNIFFLES {
       --input ${bam} \
       --vcf \$name.sniffles.vcf \
       --threads ${task.cpus} \
-      --phase \
       --allow-overwrite > sniffles.log 2>&1 &
     pid=\$!
 

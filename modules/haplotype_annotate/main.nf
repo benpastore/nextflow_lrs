@@ -1,7 +1,7 @@
 // Post-hoc haplotype annotation for callers with no native phasing mode
 // (see bin/annotate_haplotype.py for why: Straglr and Spectre don't read the
 // HP:i:1/HP:i:2 tags already present on the haplotagged BAM they're called
-// against). Clair3 (phased via longphase/longphase_sv) and Sniffles (--phase)
+// against). Clair3 SNVs and Sniffles SVs (phased together by longphase_sv)
 // need no equivalent step -- they already carry real phase.
 
 process HAPLOTYPE_ANNOTATE_STRAGLR {

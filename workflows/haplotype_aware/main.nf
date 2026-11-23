@@ -10,21 +10,22 @@ pastore.28@osu.edu
 Flow (each stage is a numbered section in the workflow below):
   1. reads        parse design / basecall pod5 -> dorado trim -> QC -> HERRO correction
   2. family       split parents out (family.json); parents get alignment + Clair3 + Sniffles only
-  3. alignment    minimap2 -> Clair3 -> longphase -> Sniffles -> longphase (SNV+SV)
-  4. other calls  Straglr repeats, Spectre CNV, paraphase, methylation (optional)
-  5. trio phasing WhatsHap pedigree phasing -> the child's phased small-variant VCF
-                  (SVs: SV_TRIO_ORIGIN, since WhatsHap can't phase SVs)
-  6. annotate     consolidate (WhatsHap small variants + Sniffles SVs), every variant
-                  labelled with its parental haplotype (INFO/ORIGIN) -> snpEff -> population AF
-  7. IBD          hap-ibd on the family-phased VCF: which parental copies each mild /
-                  severe sib pair shares (IBD0/1/2)
-  8. modifiers    per family, the mild child's genes with a homozygous variant, a
-                  compound het or a non-genic (regulatory) variant that differs from
-                  the severe sib -> mild / severe VCFs with IBD state + AF
-  9. methylation  mild vs severe promoter methylation per parental copy (optional)
- 10. recurrence   genes passing in >= modifier_min_mild mild children -> AlphaGenome /
-                  AlphaMissense on every mild and severe variant in the gene
-                  (two deduplicated VCFs, scored per side)
+  3. alignment    minimap2 -> Clair3 + Sniffles -> longphase (SNV+SV phased together)
+                  -> per child: phased SNV VCF, phased SV VCF, haplotagged BAM
+  4. trio phasing WhatsHap pedigree phasing -> the child's final phased small-variant VCF;
+                  SV parent of origin (SV_TRIO_ORIGIN). Both feed INFO/ORIGIN in stage 5.
+  5. master VCF   consolidate (small variants + SVs, INFO/ORIGIN) -> snpEff -> population AF
+  6. modifiers    6a IBD        which parental copies each mild / severe sib pair shares
+                  6b variants   per family, the mild child's passing genes vs the severe sib
+                                (homozygous / compound het / regulatory), then recurrence
+                                across mild children
+                  6c scoring    AlphaGenome / AlphaMissense on every mild and severe variant
+                                in the recurrent genes (two deduplicated VCFs)
+  7. other mild vs severe comparisons (each optional)
+                  7a methylation  modkit per haplotype -> promoter 5mC per parental copy
+                  7b repeats      Straglr (+ haplotype) -> repeat-expansion comparison
+                  7c CNV          Spectre (+ haplotype) -> copy-number comparison
+                  7d paraphase    paralog / segmental-duplication genes (per sample)
 
   With parents:
     WHATSHAP_PHASE_FAMILY ---> family VCF -> ORIENT_PHASE -> HAP_IBD -> IBD_SEGMENTS --+
@@ -124,7 +125,7 @@ include { pod5_basecall } from '../../subworkflows/pod5.nf'
 include { herro_correction } from '../../subworkflows/herro.nf'
 include { trio_family } from '../../subworkflows/trio.nf'
 include { assembly } from '../../subworkflows/assembly.nf'
-include { minimap2_index; minimap2; minimap2_methylation; clair3; longphase; sniffles; longphase_sv;
+include { minimap2_index; minimap2; minimap2_methylation; clair3; sniffles; longphase_sv;
           straglr; haplotype_annotate_straglr; spectre; haplotype_annotate_spectre; cnv_compare;
           repeat_compare; paraphase; methylation_haplotag; modkit; consolidate_variants; snpeff;
           kg_af } from '../../subworkflows/ont.nf'
@@ -214,7 +215,7 @@ workflow {
     ////////////////// (optional) ASSEMBLY -- off by default /////////////////////
     // Standalone branch: dipcall / hapdiff calls are published under
     // 04_assembly / 06_variants but are NOT merged into the alignment-based
-    // master VCF (stage 6a) -- the two call sets are kept separate.
+    // master VCF (stage 5) -- the two call sets are kept separate.
     if (params.assemble_genome) {
         assembly( reads_ch, run_trio ? trio_family.out.trio_assembly : Channel.empty(),
                   reference_index, samtools_fai_index )
@@ -224,57 +225,29 @@ workflow {
     minimap2( reference_index, reads_ch.map { sid, unal_bam, fastq -> tuple(sid, fastq) } )
     clair3( samtools_fai_index, minimap2.out.bams )
 
-    // round 1: phase SNVs/indels, haplotag -> Sniffles (phased SVs)
-    longphase( samtools_fai_index, clair3.out.clair3_ch.join( minimap2.out.bams ) )
-    sniffles( longphase.out.longphase_ch )
+    // SVs called unphased on the same minimap2 BAM as Clair3
+    sniffles( minimap2.out.bams )
 
-    // round 2: re-phase SNVs + SVs together; this BAM/VCF feeds everything below
+    // ONE longphase run phases SNVs/indels + SVs together and haplotags the
+    // BAM; its BAM / SNV VCF / SV VCF (same phase blocks) feed everything below
     longphase_sv( samtools_fai_index,
                   clair3.out.clair3_ch.join( sniffles.out.sniffles_ch ).join( minimap2.out.bams ) )
     phased_bam_ch = longphase_sv.out.longphase_sv_ch          // (sid, bam, bai)
     phased_vcf_ch = longphase_sv.out.longphase_sv_vcf_ch      // (sid, vcf, tbi)
+    phased_sv_ch  = longphase_sv.out.longphase_sv_sv_vcf_ch   // (sid, vcf, tbi) phased SVs
 
-    ////////////////// 4. REPEATS, CNV, PARAPHASE, METHYLATION /////////////////////
-    straglr( phased_bam_ch, samtools_fai_index )
-    haplotype_annotate_straglr( straglr.out.straglr.join( phased_bam_ch ) )
-
-    spectre( phased_bam_ch, samtools_fai_index )
-    haplotype_annotate_spectre( spectre.out.spectre_bed_ch.join( phased_bam_ch ) )
-
-    paraphase( phased_bam_ch, samtools_fai_index )
-
-    if (params.run_methylation) {
-        methylation_haplotag( phased_bam_ch, minimap2_methylation.out.bams )
-        modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
-    }
-
-    // mild vs severe CNV / repeat comparison
-    // (<results>/10_modifier_analysis/{cnv,repeat_expansion})
-    repeat_pairs_ch = Channel.value(file("NO_FILE"))
-    cnv_gene_cn_ch = Channel.value(file("NO_FILE"))
-    if (params.family_json && (params.run_cnv_compare || params.run_repeat_compare)) {
-        def cmp_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
-        if (params.run_cnv_compare) {
-            if (!cmp_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_cnv_compare' }
-            cnv_compare( file(params.family_json), spectre.out.spectre_vcf_ch, file(cmp_gtf_path, checkIfExists: true) )
-            cnv_gene_cn_ch = cnv_compare.out.cnv_gene_cn_ch
-        }
-        if (params.run_repeat_compare) {
-            repeat_compare(
-                file(params.family_json),
-                straglr.out.straglr,
-                cmp_gtf_path ? file(cmp_gtf_path, checkIfExists: true) : file("NO_FILE"),
-                params.repeat_known_loci_bed ? file(params.repeat_known_loci_bed, checkIfExists: true) : file("NO_FILE")
-            )
-            repeat_pairs_ch = repeat_compare.out.repeat_pairs_ch
-        }
-    }
-
-    ////////////////// 5. TRIO PHASING + SV PARENT OF ORIGIN /////////////////////
-    // small_vcf_ch = the child's phased small-variant VCF used by everything
-    // below: WhatsHap pedigree phasing when parents are available, otherwise
-    // longphase_sv as-is.
-    small_vcf_ch = phased_vcf_ch
+    ////////////////// 4. TRIO PHASING + SV PARENT OF ORIGIN /////////////////////
+    // Why before consolidation: stage 3 gives each child a phased SNV VCF and
+    // a phased SV VCF, but phased only from that child's reads -- the PS
+    // blocks don't say which allele came from which parent. With parents:
+    //  - WhatsHap pedigree phasing REPLACES the child's small-variant VCF
+    //    (phase from the parents' genotypes + everyone's reads), and also
+    //    writes the family VCF the IBD step (6a) needs
+    //  - SV_TRIO_ORIGIN gives each SV its parent (transmission + longphase SV phase)
+    // Consolidation (5) then writes INFO/ORIGIN from both, and everything
+    // downstream reads that one master VCF. Without parents this stage is
+    // skipped and the longphase VCFs go straight to consolidation.
+    small_vcf_ch = phased_vcf_ch          // (child, vcf, tbi)
     sv_origin_ch = Channel.empty()        // (child, sv_trio_origin.tsv)
     parent_pair_ch = Channel.empty()      // (child, [father_vcf, mother_vcf])
     if (run_trio) {
@@ -306,44 +279,31 @@ workflow {
                 vl.collect { v -> tuple(v.name - '.trio.whatshapphase.vcf.gz', v, tl.find { it.name == v.name + '.tbi' }) } }
 
         // SVs: WhatsHap can't phase them, so their parent of origin comes from
-        // Sniffles' own phase tags (assigned on the round-1 longphase BAM, hence
-        // round-1's phase blocks) + whether each parent carries the SV.
-        // Written into the master VCF's INFO/ORIGIN at consolidation.
+        // longphase's SV phase (GT + PS, same blocks as phased_vcf_ch) + whether
+        // each parent carries the SV.
         SV_TRIO_ORIGIN(
-            sniffles.out.sniffles_ch.map { sid, vcf, tbi -> tuple(sid, vcf) }
-                .join( longphase.out.longphase_vcf_ch.map { sid, vcf, tbi -> tuple(sid, vcf) } )
+            phased_sv_ch.map { sid, vcf, tbi -> tuple(sid, vcf) }
+                .join( phased_vcf_ch.map { sid, vcf, tbi -> tuple(sid, vcf) } )
                 .join( trio_family.out.trio_sv ),
             file("${params.bin}/sv_trio_origin.py") )
         sv_origin_ch = SV_TRIO_ORIGIN.out.sv_trio_origin_ch.map { sid, tsv, blocks -> tuple(sid, tsv) }
     }
 
-    /*
-    ===================== STAGES 6-9 AT A GLANCE =====================
-      stage 5 gave us, per child:  phased SNVs/indels (WhatsHap family)
-                                   + SVs (Sniffles) + SV parent of origin
-      6a CONSOLIDATE  merge all callers -> ONE master VCF per child,
-                      every site labelled INFO/ORIGIN (paternal/maternal)
-      6b SNPEFF       gene + consequence for every site (ANN)
-      6c ALLELE FREQ  gnomAD + 1000 Genomes AF written into INFO, once
-      7  IBD          hap-ibd: which parental copies mild & severe sibs share
-      8  MILD COPIES  mild variants on a copy the severe sib didn't inherit
-      9  METHYLATION  mild vs severe promoter 5mC per parental copy
-    ==================================================================
-    */
-
-    ////////////////// 6a. CONSOLIDATE CALLERS /////////////////////
-    // in:  phased small variants (small_vcf_ch), Sniffles SVs -- alignment-
-    //      based callers only (assembly calls stay separate) -- plus parents'
-    //      Clair3 VCFs and SV_TRIO_ORIGIN
-    // out: <child>.master.vcf -- one row per site, each caller's GT:PS in its
-    //      own column, INFO/CALLERS, and (with parents) INFO/ORIGIN
-    // why here: WhatsHap only phases SNVs/indels, so this is where they meet
-    //      the SVs; ORIGIN needs the trio-phased GTs + SV_TRIO_ORIGIN, both
-    //      made in stage 5. Every later step reads this one file per child.
+    ////////////////// 5. MASTER VCF: CONSOLIDATE -> SNPEFF -> ALLELE FREQUENCY /////////////////////
+    // 5a consolidate: small variants (small_vcf_ch) + SVs (phased_sv_ch) ->
+    //    <child>.master.vcf, one row per site, each caller's GT:PS in its own
+    //    column, INFO/CALLERS and (with parents) INFO/ORIGIN. Alignment-based
+    //    callers only; assembly calls stay separate.
+    // 5b snpEff: + INFO/ANN (gene, consequence, impact).
+    // 5c allele frequency: + INFO/gnomAD_AF_NFE and INFO/KG_AF_EUR
+    //    (<child>.snpeff.af.vcf.gz, 06_variants/snpeff_af). Two sources because
+    //    each misses what the other has: the gnomAD file is a projection onto
+    //    CHM13 and drops sites where CHM13 carries the minor allele; 1000
+    //    Genomes is re-called natively on CHM13 (smaller, EUR). Annotation only.
     no_file = file("NO_FILE")
     consolidate_variants(
         small_vcf_ch.map { sid, vcf, tbi -> tuple(sid, vcf) }
-            .join( sniffles.out.sniffles_ch.map { sid, vcf, tbi -> tuple(sid, vcf) } )
+            .join( phased_sv_ch.map { sid, vcf, tbi -> tuple(sid, vcf) } )
             .join( parent_pair_ch, remainder: true )
             .join( sv_origin_ch, remainder: true )
             // remainder also emits right-only items (e.g. a family.json child
@@ -356,13 +316,6 @@ workflow {
                       parents ? parents[0] : no_file, parents ? parents[1] : no_file, sv_tsv ?: no_file) }
     )
 
-    ////////////////// 6b + 6c. SNPEFF, POPULATION ALLELE FREQUENCY /////////////////////
-    // 6b in: master VCF.  out: same VCF + INFO/ANN (gene, consequence, impact).
-    // 6c in: snpEff VCFs.  out: <child>.snpeff.af.vcf.gz with INFO/gnomAD_AF_NFE
-    //    and INFO/KG_AF_EUR (06_variants/snpeff_af). Two sources because each
-    //    misses what the other has: the gnomAD file is a projection onto CHM13
-    //    and drops sites where CHM13 carries the minor allele; 1000 Genomes is
-    //    re-called natively on CHM13 (smaller, EUR). Annotation only.
     if (params.run_snpeff) {
         if (!params.snpeff_db) { exit 1, 'params.snpeff_db not set!' }
         if (!params.snpeff_data_dir) { exit 1, 'params.snpeff_data_dir not set!' }
@@ -378,42 +331,46 @@ workflow {
         allele_frequency( snpeff.out.snpeff_vcf_ch, kg_af_vcf_ch )
     }
 
-    ////////////////// 7. SIBLING IBD WITH HAP-IBD /////////////////////
-    // in:  WHATSHAP_PHASE_FAMILY's family VCF (all members, one per family)
-    // ORIENT_PHASE: children only, each child's phase blocks flipped so GT is
-    //      paternal|maternal along the whole chromosome (hap-ibd ignores PS)
-    // HAP_IBD: haplotype-level IBD segments (uniform 1 cM/Mb map)
-    // IBD_SEGMENTS: per mild x severe pair, per parent, shared / not_shared,
-    //      combined into IBD0/1/2 (<results>/07_haplotypes)
-    // Runs on the family VCF, not the master VCFs: hap-ibd needs every
-    // member's phased genotypes in one VCF and only uses biallelic SNVs.
+    // gene model for every mild vs severe comparison below
+    def cmp_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
+
+    ////////////////// 6. MODIFIER ANALYSIS (trio families only) /////////////////////
     if (run_trio) {
+
+        // 6a. SIBLING IBD
+        // in:  WHATSHAP_PHASE_FAMILY's family VCF (all members, one per family)
+        // ORIENT_PHASE: children only, each child's phase blocks flipped so GT is
+        //      paternal|maternal along the whole chromosome (hap-ibd ignores PS)
+        // HAP_IBD: haplotype-level IBD segments (uniform 1 cM/Mb map)
+        // IBD_SEGMENTS: per mild x severe pair, per parent, shared / not_shared,
+        //      combined into IBD0/1/2 (<results>/07_haplotypes)
+        // Runs on the family VCF, not the master VCFs: hap-ibd needs every
+        // member's phased genotypes in one VCF and only uses biallelic SNVs.
+        // Also feeds 7a (methylation per shared / not_shared copy).
         haplotype_analysis( file(params.family_json), WHATSHAP_PHASE_FAMILY.out.family_vcf_ch, samtools_fai_index )
 
-        ////////////////// 8. MODIFIER GENES (variant based) /////////////////////
-        // in:  annotated master VCFs (ORIGIN + ANN + AF) + the stage 7 IBD0/1/2
+        // 6b. MODIFIER GENES (variant based) + RECURRENCE
+        // in:  annotated master VCFs (ORIGIN + ANN + AF) + the 6a IBD0/1/2
         //      segments + the gene model
         // out: per family (<results>/10_modifier_analysis/variants/families/<family>):
         //      the mild child's passing genes -- homozygous (severe sib not
         //      homozygous for it), compound_het (>= 1 het per parental copy,
         //      >= 1 absent from the severe sib), regulatory (non-genic, not
         //      carried identically by the severe sib; both flanking genes) --
-        //      plus mild / severe VCFs of the supporting variants with
-        //      INFO/IBD + AF. Then the cohort count of families per gene.
-        //      No statistical model and no AF filter.
+        //      plus mild / severe VCFs with INFO/IBD + AF; then the cohort
+        //      count of mild children per gene. No statistical model, no AF filter.
         if (params.run_modifier_analysis) {
             if (!params.run_snpeff) {
                 log.warn "--run_modifier_analysis needs snpEff annotation (--run_snpeff) -- skipping the modifier search"
             } else {
-                def mod_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
-                if (!mod_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_modifier_analysis' }
+                if (!cmp_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_modifier_analysis' }
                 modifier_analysis(
                     file(params.family_json), allele_frequency.out.af_vcf,
                     haplotype_analysis.out.ibd_segments_ch.first(),
-                    file(mod_gtf_path, checkIfExists: true)
+                    file(cmp_gtf_path, checkIfExists: true)
                 )
 
-                ////////////////// 10. ALPHAGENOME / ALPHAMISSENSE /////////////////////
+                // 6c. ALPHAGENOME / ALPHAMISSENSE
                 // every mild / severe variant in the genes passing in >=
                 // modifier_min_mild mild children, one chain per side; each
                 // tool's per-variant output as is
@@ -427,20 +384,53 @@ workflow {
                 }
             }
         }
+    }
 
-        ////////////////// 9. PROMOTER METHYLATION /////////////////////
-        // in:  modkit HP1/HP2 pileups, longphase_sv VCF (source of the HP
-        //      tags), parents' VCFs, the stage 7 sharing segments
-        // out: mild vs severe promoter 5mC, combined and per parental copy,
-        //      each copy labelled shared / not_shared (<results>/10_modifier_analysis/methylation)
-        if (params.run_methylation) {
-            def meth_gtf_path = params.cnv_repeat_gtf ?: params.snpeff_gtf
-            if (!meth_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_methylation' }
+    ////////////////// 7. OTHER MILD vs SEVERE COMPARISONS /////////////////////
+    // Each starts from the stage 3 haplotagged BAM; the per-sample calls run
+    // for every child, the mild vs severe comparison needs --family_json.
+    // Results: <results>/10_modifier_analysis/{methylation,repeat_expansion,cnv}
+
+    // 7a. METHYLATION -- modkit per haplotype on the raw (pre-HERRO) reads,
+    //     HP tags copied over from the phased BAM; then (trio families) mild
+    //     vs severe promoter 5mC, combined and per parental copy, each copy
+    //     labelled shared / not_shared from the 6a segments
+    if (params.run_methylation) {
+        methylation_haplotag( phased_bam_ch, minimap2_methylation.out.bams )
+        modkit( methylation_haplotag.out.haplotagged, samtools_fai_index )
+
+        if (run_trio) {
+            if (!cmp_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_methylation' }
             methylation_compare(
                 file(params.family_json), modkit.out.modkit, phased_vcf_ch,
                 trio_family.out.parent_vcf, haplotype_analysis.out.parent_segments_ch,
-                file(meth_gtf_path, checkIfExists: true)
+                file(cmp_gtf_path, checkIfExists: true)
             )
         }
     }
+
+    // 7b. REPEAT EXPANSIONS -- Straglr, haplotype from the BAM's HP tags,
+    //     then mild vs severe per locus
+    straglr( phased_bam_ch, samtools_fai_index )
+    haplotype_annotate_straglr( straglr.out.straglr.join( phased_bam_ch ) )
+    if (params.family_json && params.run_repeat_compare) {
+        repeat_compare(
+            file(params.family_json),
+            straglr.out.straglr,
+            cmp_gtf_path ? file(cmp_gtf_path, checkIfExists: true) : file("NO_FILE"),
+            params.repeat_known_loci_bed ? file(params.repeat_known_loci_bed, checkIfExists: true) : file("NO_FILE")
+        )
+    }
+
+    // 7c. CNV -- Spectre, haplotype from the BAM's HP tags, then mild vs
+    //     severe gene copy number
+    spectre( phased_bam_ch, samtools_fai_index )
+    haplotype_annotate_spectre( spectre.out.spectre_bed_ch.join( phased_bam_ch ) )
+    if (params.family_json && params.run_cnv_compare) {
+        if (!cmp_gtf_path) { exit 1, 'params.cnv_repeat_gtf (or params.snpeff_gtf) must be set for run_cnv_compare' }
+        cnv_compare( file(params.family_json), spectre.out.spectre_vcf_ch, file(cmp_gtf_path, checkIfExists: true) )
+    }
+
+    // 7d. PARAPHASE -- paralog / segmental-duplication genes, per sample
+    paraphase( phased_bam_ch, samtools_fai_index )
 }

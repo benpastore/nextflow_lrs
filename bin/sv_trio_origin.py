@@ -14,9 +14,10 @@ independent lines of evidence:
                 neither -> not_in_parents (de novo candidate, or missed in a parent)
      child hom: both -> both_parents, one -> hom_one_parent, neither -> not_in_parents
 
-2. Haplotype -- the child's Sniffles call carries its longphase haplotype and
-   phase block (INFO/PHASE=hp,ps,...; trusted only when Sniffles' own QC
-   says PASS). Inside each longphase block, the child's phased het SNVs at
+2. Haplotype -- the child's SV carries its longphase haplotype and phase
+   block: phased GT (1|0 = haplotype 1, 0|1 = haplotype 2) + FORMAT/PS from
+   longphase --sv-file (LONGPHASE_SV), or, for older inputs, Sniffles'
+   INFO/PHASE=hp,ps,... (trusted only when Sniffles' own QC says PASS). Inside each longphase block, the child's phased het SNVs at
    which the parents' Clair3 genotypes differ say which haplotype came from
    which parent (father 0/0 + mother carries ALT -> ALT is maternal, etc.).
    A block's HP1 is called paternal/maternal when >= -min_informative such
@@ -24,8 +25,9 @@ independent lines of evidence:
    gives its origin. This resolves SVs transmission can't (present in both
    parents) and cross-checks the ones it can.
 
-   The SNV VCF must be the phased VCF whose blocks match the BAM Sniffles ran
-   on (in this pipeline: LONGPHASE round 1, *.longphase.vcf.gz). A child
+   The SNV VCF must come from the same phasing run as the SV phase so the
+   block IDs match (in this pipeline: LONGPHASE_SV's *.longphase_sv.vcf.gz,
+   with its *.longphase_sv.SV.sniffles.vcf.gz as the child SV VCF). A child
    site absent from a parent's Clair3 VCF is taken as hom-ref (Clair3 only
    writes variant sites); -missing_parent_as_missing turns that off.
 
@@ -97,15 +99,24 @@ class SV(object):
             self.end = int(d.get("END", self.pos))
         except ValueError:
             self.end = self.pos
-        self.gt = sample_fields(fields).get("GT", "")
+        sf = sample_fields(fields)
+        self.gt = sf.get("GT", "")
         self.hp = self.ps = ""
-        phase = d.get("PHASE", "").split(",")
-        # PHASE=<hp>,<phaseset>,<nSupport>,<nTotal>,<qcHP>,<qcPhaseset>
-        if len(phase) >= 6:
-            if phase[4] == "PASS" and phase[0] in ("1", "2"):
-                self.hp = phase[0]
-            if phase[5] == "PASS" and phase[1] not in ("", "NULL"):
-                self.ps = phase[1]
+        # longphase (--sv-file): phased GT + FORMAT/PS -- ALT on haplotype 1
+        # (1|0) or 2 (0|1), in the same blocks as longphase's SNV VCF
+        ps = sf.get("PS", "")
+        if self.gt in ("1|0", "0|1") and ps not in ("", "."):
+            self.hp = "1" if self.gt == "1|0" else "2"
+            self.ps = ps
+        else:
+            # older input: Sniffles --phase on a haplotagged BAM
+            # PHASE=<hp>,<phaseset>,<nSupport>,<nTotal>,<qcHP>,<qcPhaseset>
+            phase = d.get("PHASE", "").split(",")
+            if len(phase) >= 6:
+                if phase[4] == "PASS" and phase[0] in ("1", "2"):
+                    self.hp = phase[0]
+                if phase[5] == "PASS" and phase[1] not in ("", "NULL"):
+                    self.ps = phase[1]
         self.mate = None
         if self.svtype == "BND":
             m = BND_MATE_RE.search(alt)
@@ -222,10 +233,10 @@ def other(origin):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-child", required=True)
-    p.add_argument("-child_sv", required=True, help="Child Sniffles VCF (run with --phase)")
+    p.add_argument("-child_sv", required=True, help="Child phased SV VCF (LONGPHASE_SV *_SV output, or Sniffles --phase)")
     p.add_argument("-father_sv", required=True)
     p.add_argument("-mother_sv", required=True)
-    p.add_argument("-child_snv", required=True, help="Child phased SNV VCF whose blocks match Sniffles' BAM")
+    p.add_argument("-child_snv", required=True, help="Child phased SNV VCF from the same phasing run as the SV phase")
     p.add_argument("-father_snv", required=True, help="Father Clair3 VCF")
     p.add_argument("-mother_snv", required=True, help="Mother Clair3 VCF")
     p.add_argument("-merge_dist", type=int, default=500)

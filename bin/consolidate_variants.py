@@ -63,7 +63,9 @@ def parse_caller_arg(arg):
 
 SVTYPE_RE = re.compile(r"(?:^|;)SVTYPE=([^;]+)")
 END_RE = re.compile(r"(?:^|;)END=(-?[0-9]+)")
-# Sniffles --phase writes its phase-block id to INFO/PHASE, not FORMAT/PS:
+# SV phase: in this pipeline the SV VCF is LONGPHASE_SV's phased SV output,
+# which carries phased GT + FORMAT/PS (read first, below). Fallback for older
+# inputs -- Sniffles --phase writes its phase-block id to INFO/PHASE instead:
 # PHASE=<hp>,<phaseset>,<nSupportingReads>,<nTotalReads>,<qcHP>,<qcPhaseset>
 # e.g. PHASE=1,1363,4,4,PASS,PASS -- phaseset "1363" is the same block id a
 # read-based phaser like longphase would report as Clair3's PS for the same
@@ -153,8 +155,8 @@ def parse_vcf(path, caller):
 # INFO/ORIGIN = paternal | maternal | both | unknown, i.e. which parental
 # haplotype the child's ALT is on, so the master VCF carries haplotype
 # identity for small variants and SVs in one comparable label (their PS
-# values are not comparable: small-variant blocks come from WhatsHap, SV
-# blocks from Sniffles on the round-1 longphase BAM).
+# values are not comparable: in trio mode small-variant blocks come from
+# WhatsHap, SV blocks from LONGPHASE_SV).
 #   small variants, in order:
 #     homozygous                        -> both
 #     parents' genotypes decide it      -> mendelian     (father 0/0 + mother

@@ -80,6 +80,11 @@ process LONGPHASE_SV {
 
         tuple val(sampleID), path("*.longphase_sv.vcf.gz"), path("*.longphase_sv.vcf.gz.tbi"), emit : longphase_sv_vcf_ch
 
+        // longphase's phased SVs (same phase blocks as the SNV VCF + BAM above);
+        // the only SV VCF downstream uses (SV_TRIO_ORIGIN, consolidation).
+        // Named *.sniffles.vcf.gz so consolidate_variants.py still sees it as Sniffles.
+        tuple val(sampleID), path("*.longphase_sv.SV.sniffles.vcf.gz"), path("*.longphase_sv.SV.sniffles.vcf.gz.tbi"), emit : longphase_sv_sv_vcf_ch
+
     script:
     """
     set -euo pipefail
@@ -100,11 +105,26 @@ process LONGPHASE_SV {
         --indels \\
         --ont
 
-    # LongPhase usually writes: <prefix>_SNP.vcf
+    # LongPhase writes the phased SNVs/indels to <prefix>.vcf and, with
+    # --sv-file, the phased SVs to <prefix>_SV.vcf
     PHASED_VCF="\$name.longphase_sv.vcf"
+    SV_VCF="\$name.longphase_sv_SV.vcf"
+    if [ ! -s "\$SV_VCF" ]; then
+        SV_VCF=\$(ls *_SV.vcf 2>/dev/null | head -n 1 || true)
+    fi
+    if [ -z "\$SV_VCF" ] || [ ! -s "\$SV_VCF" ]; then
+        echo "[LONGPHASE_SV] longphase wrote no phased SV VCF (<prefix>_SV.vcf); files here:" >&2
+        ls -l >&2
+        exit 1
+    fi
+    n_in=\$(zcat -f ${sv_vcf} | grep -vc '^#' || true)
+    n_out=\$(grep -vc '^#' "\$SV_VCF" || true)
+    echo "[LONGPHASE_SV] \$SV_VCF: \$n_out SV records (Sniffles input: \$n_in)" >&2
 
     bgzip -f "\$PHASED_VCF"
     tabix -f -p vcf "\${PHASED_VCF}.gz"
+    bgzip -c "\$SV_VCF" > \$name.longphase_sv.SV.sniffles.vcf.gz
+    tabix -f -p vcf \$name.longphase_sv.SV.sniffles.vcf.gz
 
     longphase haplotag \\
         -s "\${PHASED_VCF}.gz" \\

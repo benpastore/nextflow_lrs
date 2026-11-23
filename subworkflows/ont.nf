@@ -262,6 +262,7 @@ workflow longphase_sv {
     emit :
         longphase_sv_ch = LONGPHASE_SV.out.longphase_sv_ch
         longphase_sv_vcf_ch = LONGPHASE_SV.out.longphase_sv_vcf_ch
+        longphase_sv_sv_vcf_ch = LONGPHASE_SV.out.longphase_sv_sv_vcf_ch   // phased SVs
 }
 
 include { SNIFFLES } from '../modules/sniffles/main.nf'
