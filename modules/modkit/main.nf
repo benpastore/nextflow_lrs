@@ -97,6 +97,7 @@ process MODKIT_PILEUP {
         ${bam} \\
         modkit_out \\
         --ref ${ref} \\
+        --modified-bases 5mC 5hmC \\
         --cpg \\
         --combine-strands \\
         --phased \\

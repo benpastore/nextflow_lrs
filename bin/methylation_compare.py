@@ -275,7 +275,8 @@ def accumulate(child, beds, blocks, pindex, min_cov):
         with opener(path) as f:
             for line in f:
                 c = line.split()
-                if len(c) < 12 or c[3] != "m":
+                # 5mC rows: 'm' (or 'm,CG,0' / '5mC' depending on modkit version)
+                if len(c) < 12 or c[3].split(",")[0] not in ("m", "5mC"):
                     continue
                 chrom, pos = c[0], int(c[1])
                 proms = pindex.at(chrom, pos)
