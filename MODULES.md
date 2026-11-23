@@ -282,7 +282,7 @@ Segmental-duplication region reconstruction (e.g. SMN1/SMN2) via `paraphase`, re
 - **out**: `tuple val(sampleID), path("*.paraphase.json"), path("*.paraphase.bam+bai"), path("*_paraphase_vcfs")` → `paraphase_ch`
 
 ### `MODKIT_PILEUP` — `modules/modkit/main.nf`
-Per-haplotype methylation pileup (`modkit pileup --partition-tag HP`) on the final haplotagged bam.
+Per-haplotype methylation pileup (`modkit pileup --phased`, modkit >= 0.6) on the final haplotagged bam.
 Silently produces empty output if MM/ML tags were ever dropped upstream (see `SAMTOOLS_CONVERT_BAM_TO_FASTQ`/`MINIMAP2_ALIGN` notes above).
 - **in**: `tuple val(sampleID), val(bam), val(bai)`, `tuple val(ref), val(ref_fai)`
 - **out**: `tuple val(sampleID), path("${sampleID}*.bed.gz")` → `modkit_ch`
@@ -387,7 +387,7 @@ within a phase block, so each longphase_sv block's HP1 is assigned to a parent b
 SNVs (one parent carries the ALT, the other hom-ref). Each side is labelled `shared` / `not_shared` from
 `cohort.sib_parent_segments.tsv` — a difference on a not_shared haplotype may be sequence-driven (cis); on a
 shared one it is epigenetic on identical sequence. Flag at |Δ| ≥ `meth_min_delta` (0.2).
-- **in**: modkit `hp1/hp2/ungrouped` bedMethyl + longphase_sv VCF per child, parents' Clair3 VCFs, sib segments, GTF
+- **in**: modkit `hp1/hp2/combined` bedMethyl + longphase_sv VCF per child, parents' Clair3 VCFs, sib segments, GTF
 - **out** (`10_modifier_analysis/methylation`): `cohort.promoter_methylation.tsv` (+ `.flagged.tsv`),
   `cohort.methylation_phase_blocks.tsv` (block → parent), `cohort.methylation_imprinting_check.tsv`
   (SNRPN/PEG3/MEST/… should be methylated on the maternal side, H19/MEG3 paternal — `consistent=no` across the

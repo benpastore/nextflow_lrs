@@ -112,7 +112,7 @@ workflow methylation_compare {
 
     take :
         family_json
-        modkit_beds      // tuple(childID, hp1.bed.gz, hp2.bed.gz, ungrouped.bed.gz)
+        modkit_beds      // tuple(childID, hp1.bed.gz, hp2.bed.gz, combined.bed.gz)
         phased_vcf       // tuple(childID, longphase_sv vcf, tbi) -- source of the HP tags
         parent_vcf       // tuple(parentID, clair3 vcf)
         parent_segments  // cohort.sib_parent_segments.tsv

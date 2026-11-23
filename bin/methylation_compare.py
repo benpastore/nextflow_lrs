@@ -16,8 +16,8 @@ sequence-driven (cis); one on a shared haplotype is an epigenetic
 difference on identical sequence.
 
 Inputs
-  -manifest           childID<TAB>hp1.bed.gz<TAB>hp2.bed.gz<TAB>ungrouped.bed.gz<TAB>phased.vcf.gz
-                      (MODKIT_PILEUP --partition-tag HP output, and the
+  -manifest           childID<TAB>hp1.bed.gz<TAB>hp2.bed.gz<TAB>combined.bed.gz<TAB>phased.vcf.gz
+                      (MODKIT_PILEUP --phased output, and the
                       longphase_sv VCF whose phasing those HP tags came from)
   -parent_manifest    parentID<TAB>clair3.vcf.gz
   -family_json        {"child": {"father", "mother", "phenotype"}}
@@ -260,7 +260,12 @@ def assign_blocks(child, phased_vcf, father_vcf, mother_vcf, min_votes, min_agre
 
 def accumulate(child, beds, blocks, pindex, min_cov):
     """{promoter idx: {side: [nmod, nvalid, ncpg]}} for side in
-    combined / paternal / maternal."""
+    combined / paternal / maternal.
+
+    beds: ("1", hp1), ("2", hp2), ("all", combined). modkit >= 0.6 --phased
+    writes combined.bedmethyl over ALL reads, so "combined" comes from that
+    file only and the hp1/hp2 files feed only the paternal / maternal sides
+    (summing all three would count every phased read twice)."""
     acc = defaultdict(lambda: {"combined": [0, 0, 0], "paternal": [0, 0, 0], "maternal": [0, 0, 0]})
     combined_cpg = defaultdict(set)
     n_rows = 0
@@ -287,10 +292,11 @@ def accumulate(child, beds, blocks, pindex, min_cov):
                         side = hp1 if hp == "1" else OTHER[hp1]
                 for p in proms:
                     a = acc[p.idx]
-                    a["combined"][0] += nmod
-                    a["combined"][1] += nvalid
-                    combined_cpg[p.idx].add(pos)
-                    if side is not None and nvalid >= min_cov:
+                    if hp == "all":
+                        a["combined"][0] += nmod
+                        a["combined"][1] += nvalid
+                        combined_cpg[p.idx].add(pos)
+                    elif side is not None and nvalid >= min_cov:
                         s = a[side]
                         s[0] += nmod
                         s[1] += nvalid
@@ -366,7 +372,7 @@ def main():
         for line in f:
             c = line.rstrip("\n").split("\t")
             if len(c) >= 5:
-                children[c[0]] = {"beds": [("1", c[1]), ("2", c[2]), ("ungrouped", c[3])], "vcf": c[4]}
+                children[c[0]] = {"beds": [("1", c[1]), ("2", c[2]), ("all", c[3])], "vcf": c[4]}
     parents = {}
     with open(args.parent_manifest) as f:
         for line in f:

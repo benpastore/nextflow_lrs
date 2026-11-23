@@ -14,7 +14,7 @@ process METHYLATION_COMPARE {
 
     input:
         path(family_json)
-        path(manifest)          // child<TAB>hp1<TAB>hp2<TAB>ungrouped<TAB>phased vcf
+        path(manifest)          // child<TAB>hp1<TAB>hp2<TAB>combined<TAB>phased vcf
         path(child_files)
         path(parent_manifest)   // parent<TAB>clair3 vcf
         path(parent_vcfs)
