@@ -174,15 +174,30 @@ pysam.index('-@', '${task.cpus}', 'rg_\$s.bam')
         c=\$1
         bcftools view -r "\$c" -Oz -o "chunks/in.\$c.vcf.gz" family.vcf.gz
         bcftools index -f -t "chunks/in.\$c.vcf.gz"
-        whatshap phase \\
-          --ped ${family}.ped \\
-          --reference ${ref} \\
-          --chromosome "\$c" \\
-          --output "chunks/out.\$c.vcf.gz" \\
-          --recombination-list "chunks/recomb.\$c.tsv" \\
-          "chunks/in.\$c.vcf.gz" \\
-          "\${bams[@]}" > "chunks/\$c.log" 2>&1 \\
-          && touch "chunks/\$c.done"
+        # --recombination-list crashes in whatshap 2.1 (AssertionError in
+        # find_recombination) on a chromosome with nothing phased, e.g. chrM;
+        # retry such a chromosome without it (no recombination rows for it)
+        if whatshap phase \\
+              --ped ${family}.ped \\
+              --reference ${ref} \\
+              --chromosome "\$c" \\
+              --output "chunks/out.\$c.vcf.gz" \\
+              --recombination-list "chunks/recomb.\$c.tsv" \\
+              "chunks/in.\$c.vcf.gz" \\
+              "\${bams[@]}" > "chunks/\$c.log" 2>&1; then
+            touch "chunks/\$c.done"
+        else
+            echo "[WHATSHAP_PHASE_FAMILY] \$c failed with --recombination-list; retrying without it" >&2
+            rm -f "chunks/out.\$c.vcf.gz" "chunks/recomb.\$c.tsv"
+            whatshap phase \\
+              --ped ${family}.ped \\
+              --reference ${ref} \\
+              --chromosome "\$c" \\
+              --output "chunks/out.\$c.vcf.gz" \\
+              "chunks/in.\$c.vcf.gz" \\
+              "\${bams[@]}" > "chunks/\$c.log" 2>&1 \\
+              && touch "chunks/\$c.done"
+        fi
     }
     chroms=\$(bcftools index -s family.vcf.gz | cut -f1)
     for c in \$chroms; do
