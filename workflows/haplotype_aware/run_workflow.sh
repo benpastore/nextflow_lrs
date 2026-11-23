@@ -10,5 +10,5 @@ sh run.sh \
     --run_trio_analysis true \
     --run_snpeff true \
     --run_methylation false \
-    --results /fs/scratch/PAS0631/00_HAPLOTYPE_AWARE_ANALYSIS/FAMILY_A_1022 \
+    --results /fs/scratch/PAS0631/00_HAPLOTYPE_AWARE_ANALYSIS/FAMILY_A_1022_November \
     -resume

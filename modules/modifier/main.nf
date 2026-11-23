@@ -55,9 +55,12 @@ process MODIFIER_VARIANTS {
         -gtf ${gtf} \\
         -sv_match_dist ${params.modifier_sv_match_dist}
 
-    # bgzip + tabix when the container has them, plain gzip otherwise
+    # bgzip + tabix when the container has WORKING ones (the rnaseq image's
+    # bgzip is on PATH but missing libcrypto.so.1.0.0), plain gzip otherwise
+    use_bgzip=0
+    if command -v bgzip >/dev/null 2>&1 && printf '' | bgzip -c >/dev/null 2>&1; then use_bgzip=1; fi
     for f in */*.mild.vcf */*.severe.vcf; do
-        if command -v bgzip >/dev/null 2>&1; then
+        if [ \$use_bgzip -eq 1 ]; then
             bgzip -f "\$f"
             if command -v tabix >/dev/null 2>&1; then tabix -f -p vcf "\$f.gz" || true; fi
         else
