@@ -102,6 +102,7 @@ process WHATSHAP_PHASE_FAMILY {
     output:
         tuple path("*.trio.whatshapphase.vcf.gz"), path("*.trio.whatshapphase.vcf.gz.tbi"), emit : child_vcfs_ch
         tuple val(family), path("${family}.family.whatshapphase.vcf.gz"), path("${family}.family.whatshapphase.vcf.gz.tbi"), emit : family_vcf_ch
+        tuple val(family), path("${family}.recombination.tsv"), emit : recombination_ch
 
     script:
     def kids     = children instanceof List ? children : [children]
@@ -178,6 +179,7 @@ pysam.index('-@', '${task.cpus}', 'rg_\$s.bam')
           --reference ${ref} \\
           --chromosome "\$c" \\
           --output "chunks/out.\$c.vcf.gz" \\
+          --recombination-list "chunks/recomb.\$c.tsv" \\
           "chunks/in.\$c.vcf.gz" \\
           "\${bams[@]}" > "chunks/\$c.log" 2>&1 \\
           && touch "chunks/\$c.done"
@@ -200,6 +202,19 @@ pysam.index('-@', '${task.cpus}', 'rg_\$s.bam')
 
     bcftools concat -Oz -o ${family}.family.whatshapphase.vcf.gz \$(for c in \$chroms; do echo "chunks/out.\$c.vcf.gz"; done)
     bcftools index -f -t ${family}.family.whatshapphase.vcf.gz
+
+    # 4b) whatshap's inferred crossovers (--recombination-list), one table
+    #     for the family: the first chunk's header line(s), then every row.
+    #     Exploratory -- nothing downstream reads it yet.
+    : > ${family}.recombination.tsv
+    hdr=0
+    for c in \$chroms; do
+        f="chunks/recomb.\$c.tsv"
+        [ -s "\$f" ] || continue
+        if [ \$hdr -eq 0 ]; then grep '^#' "\$f" >> ${family}.recombination.tsv || true; hdr=1; fi
+        grep -v '^#' "\$f" >> ${family}.recombination.tsv || true
+    done
+    echo "[WHATSHAP_PHASE_FAMILY] \$(grep -vc '^#' ${family}.recombination.tsv || true) recombination events in ${family}.recombination.tsv" >&2
 
     # 5) split: child column only, sites where the child carries ALT
     for child in ${kids.join(' ')}; do
